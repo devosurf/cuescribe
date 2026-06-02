@@ -289,6 +289,12 @@ func runSetupCookies(cmd *cobra.Command, browser, profile string, disable bool) 
 				browser = selected
 			}
 		}
+		fmt.Fprint(cmd.OutOrStdout(), "profile (optional): ")
+		selectedProfile, _ := reader.ReadString('\n')
+		selectedProfile = strings.TrimSpace(selectedProfile)
+		if selectedProfile != "" {
+			profile = selectedProfile
+		}
 		cfg.Cookies.Enabled = true
 		cfg.Cookies.Browser = browser
 		cfg.Cookies.Profile = profile
