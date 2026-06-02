@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -34,6 +35,12 @@ type CookieConfig struct {
 	Enabled bool   `toml:"enabled"`
 	Browser string `toml:"browser"`
 	Profile string `toml:"profile"`
+}
+
+type InstallState struct {
+	Version     string `toml:"version"`
+	InstalledAt string `toml:"installed_at"`
+	BinaryPath  string `toml:"binary_path"`
 }
 
 func ResolvePaths() (Paths, error) {
@@ -91,6 +98,32 @@ func Save(path string, cfg Config) error {
 		return err
 	}
 	data, err := toml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+func LoadInstallState(path string) (InstallState, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return InstallState{}, err
+	}
+	var state InstallState
+	if err := toml.Unmarshal(data, &state); err != nil {
+		return InstallState{}, err
+	}
+	return state, nil
+}
+
+func SaveInstallState(path string, state InstallState) error {
+	if state.InstalledAt == "" {
+		state.InstalledAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := toml.Marshal(state)
 	if err != nil {
 		return err
 	}

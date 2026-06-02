@@ -37,3 +37,18 @@ func TestLoadSaveConfig(t *testing.T) {
 		t.Fatalf("loaded cookies = %+v", loaded.Cookies)
 	}
 }
+
+func TestLoadSaveInstallState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.toml")
+	state := InstallState{Version: "0.1.0", BinaryPath: "/usr/local/bin/cuescribe"}
+	if err := SaveInstallState(path, state); err != nil {
+		t.Fatalf("SaveInstallState() error = %v", err)
+	}
+	loaded, err := LoadInstallState(path)
+	if err != nil {
+		t.Fatalf("LoadInstallState() error = %v", err)
+	}
+	if loaded.Version != "0.1.0" || loaded.BinaryPath != "/usr/local/bin/cuescribe" || loaded.InstalledAt == "" {
+		t.Fatalf("loaded = %+v", loaded)
+	}
+}

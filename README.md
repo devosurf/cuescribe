@@ -73,6 +73,8 @@ cuescribe setup model
 cuescribe setup cookies --browser safari
 cuescribe doctor
 cuescribe version --json
+cuescribe self-update
+cuescribe uninstall --yes
 ```
 
-Config lives at `~/.config/cuescribe/config.toml`, models under `~/.local/share/cuescribe/`, and logs/cache under `~/.cache/cuescribe/`.
+Config lives at `~/.config/cuescribe/config.toml`, install state at `~/.local/state/cuescribe/install.toml`, models under `~/.local/share/cuescribe/`, and logs/cache under `~/.cache/cuescribe/`.

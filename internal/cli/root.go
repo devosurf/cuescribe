@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,12 +9,15 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/devosurf/cuescribe/internal/config"
+	"github.com/devosurf/cuescribe/internal/logging"
 	"github.com/devosurf/cuescribe/internal/model"
 	"github.com/devosurf/cuescribe/internal/output"
 	"github.com/devosurf/cuescribe/internal/pipeline"
 	"github.com/devosurf/cuescribe/internal/runner"
+	appupdate "github.com/devosurf/cuescribe/internal/update"
 	"github.com/devosurf/cuescribe/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -63,7 +67,16 @@ func NewRootCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			doc, err := pipeline.New(runner.ExecRunner{Verbose: opts.verbose, Stderr: cmd.ErrOrStderr()}).Run(cmd.Context(), pipeline.Options{
+			logFile, logPath, err := logging.OpenRunLog(paths)
+			if err != nil {
+				return err
+			}
+			defer logFile.Close()
+			fmt.Fprintf(logFile, "cuescribe %s\n", version.Version)
+			if opts.verbose {
+				fmt.Fprintf(cmd.ErrOrStderr(), "log: %s\n", logPath)
+			}
+			doc, err := pipeline.New(runner.ExecRunner{Verbose: opts.verbose, Stderr: cmd.ErrOrStderr(), Log: logFile}).Run(cmd.Context(), pipeline.Options{
 				Input:     args[0],
 				Source:    opts.source,
 				Subs:      opts.subs,
@@ -149,7 +162,10 @@ func newSetupCommand() *cobra.Command {
 			if err := runSetupModel(cmd.Context(), cmd, modelName); err != nil {
 				return err
 			}
-			return runSetupCookies(cmd, "", "", false)
+			if err := runSetupCookies(cmd, "", "", false); err != nil {
+				return err
+			}
+			return saveInstallState(cmd)
 		},
 	}
 	cmd.PersistentFlags().BoolVar(&yes, "yes", false, "install missing Homebrew dependencies without prompting")
@@ -249,6 +265,33 @@ func runSetupCookies(cmd *cobra.Command, browser, profile string, disable bool) 
 		cfg.Cookies.Enabled = true
 		cfg.Cookies.Browser = browser
 		cfg.Cookies.Profile = profile
+	} else if isTerminal(os.Stdin) {
+		detected := detectBrowsers()
+		if len(detected) == 0 {
+			fmt.Fprintln(cmd.OutOrStdout(), "no supported browsers detected; cookies disabled")
+			return config.Save(paths.ConfigFile, cfg)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "detected browsers: %s\n", strings.Join(detected, ", "))
+		fmt.Fprint(cmd.OutOrStdout(), "enable YouTube browser cookies? [y/N] ")
+		reader := bufio.NewReader(cmd.InOrStdin())
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(strings.ToLower(answer))
+		if answer != "y" && answer != "yes" {
+			fmt.Fprintln(cmd.OutOrStdout(), "cookies disabled")
+			return config.Save(paths.ConfigFile, cfg)
+		}
+		browser = detected[0]
+		if len(detected) > 1 {
+			fmt.Fprintf(cmd.OutOrStdout(), "browser [%s]: ", browser)
+			selected, _ := reader.ReadString('\n')
+			selected = strings.TrimSpace(selected)
+			if selected != "" {
+				browser = selected
+			}
+		}
+		cfg.Cookies.Enabled = true
+		cfg.Cookies.Browser = browser
+		cfg.Cookies.Profile = profile
 	} else {
 		fmt.Fprintln(cmd.OutOrStdout(), "cookies disabled")
 		fmt.Fprintln(cmd.OutOrStdout(), "enable with: cuescribe setup cookies --browser safari")
@@ -259,6 +302,18 @@ func runSetupCookies(cmd *cobra.Command, browser, profile string, disable bool) 
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "config saved: %s\n", paths.ConfigFile)
 	return nil
+}
+
+func saveInstallState(cmd *cobra.Command) error {
+	paths, err := config.ResolvePaths()
+	if err != nil {
+		return err
+	}
+	exe, _ := os.Executable()
+	return config.SaveInstallState(paths.InstallFile, config.InstallState{
+		Version:    version.Version,
+		BinaryPath: exe,
+	})
 }
 
 func newConfigCommand() *cobra.Command {
@@ -379,8 +434,22 @@ func newDoctorCommand() *cobra.Command {
 				}
 			}
 			check(true, "ok", "config", paths.ConfigFile)
+			if state, err := config.LoadInstallState(paths.InstallFile); err == nil {
+				check(state.Version != "", "error", "install state", paths.InstallFile)
+			} else {
+				check(false, "warn", "install state", "run cuescribe setup")
+			}
 			if cfg.Cookies.Enabled {
 				check(cfg.Cookies.Browser != "", "error", "cookies", "browser is required when cookies are enabled")
+				if cfg.Cookies.Browser != "" && runner.LookPath("yt-dlp") {
+					ctx, cancel := context.WithTimeout(cmd.Context(), 20*time.Second)
+					defer cancel()
+					args := []string{"--simulate", "--skip-download", "--no-warnings"}
+					args = append(args, cfg.Cookies.YTDLPCookieArgs()...)
+					args = append(args, "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+					_, err := runner.ExecRunner{Verbose: false}.Run(ctx, "yt-dlp", args...)
+					check(err == nil, "error", "YouTube cookie access", "check browser/profile access or disable cookies")
+				}
 			} else {
 				check(true, "ok", "cookies", "disabled")
 			}
@@ -428,15 +497,19 @@ func newVersionCommand() *cobra.Command {
 }
 
 func newSelfUpdateCommand() *cobra.Command {
-	return &cobra.Command{
+	var updateVersion string
+	cmd := &cobra.Command{
 		Use:   "self-update",
-		Short: "Print self-update guidance",
+		Short: "Download, verify, and replace the installed binary",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintln(cmd.OutOrStdout(), "self-update is not available until release manifests are published")
-			fmt.Fprintln(cmd.OutOrStdout(), "install latest with: curl -fsSL https://cuescribe.dev/install.sh | sh")
-			return nil
+			if err := appupdate.SelfUpdate(cmd.Context(), updateVersion, cmd.OutOrStdout()); err != nil {
+				return err
+			}
+			return saveInstallState(cmd)
 		},
 	}
+	cmd.Flags().StringVar(&updateVersion, "version", "latest", "release version or latest")
+	return cmd
 }
 
 func newUninstallCommand() *cobra.Command {
@@ -469,6 +542,9 @@ func newUninstallCommand() *cobra.Command {
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "Homebrew dependencies were not removed.")
 			fmt.Fprintln(cmd.OutOrStdout(), "Optional cleanup: brew uninstall yt-dlp ffmpeg whisper-cpp")
+			if err := removeInstalledBinary(cmd); err != nil {
+				return err
+			}
 			return nil
 		},
 	}
@@ -512,4 +588,45 @@ func brewPackages(names []string) []string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func removeInstalledBinary(cmd *cobra.Command) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if filepath.Base(exe) != "cuescribe" {
+		fmt.Fprintf(cmd.OutOrStdout(), "skipped binary removal: current executable is %s\n", exe)
+		return nil
+	}
+	if err := os.Remove(exe); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", exe)
+	return nil
+}
+
+func detectBrowsers() []string {
+	candidates := []struct {
+		name string
+		path string
+	}{
+		{"safari", "/Applications/Safari.app"},
+		{"chrome", "/Applications/Google Chrome.app"},
+		{"firefox", "/Applications/Firefox.app"},
+		{"brave", "/Applications/Brave Browser.app"},
+		{"edge", "/Applications/Microsoft Edge.app"},
+	}
+	var found []string
+	for _, candidate := range candidates {
+		if fileExists(candidate.path) {
+			found = append(found, candidate.name)
+		}
+	}
+	return found
+}
+
+func isTerminal(file *os.File) bool {
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }

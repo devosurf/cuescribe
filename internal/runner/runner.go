@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
+	"strings"
 )
 
 type Result struct {
@@ -21,9 +23,13 @@ type CommandRunner interface {
 type ExecRunner struct {
 	Verbose bool
 	Stderr  io.Writer
+	Log     io.Writer
 }
 
 func (r ExecRunner) Run(ctx context.Context, name string, args ...string) (Result, error) {
+	if r.Log != nil {
+		fmt.Fprintf(r.Log, "$ %s %s\n", name, quoteArgs(args))
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -35,13 +41,27 @@ func (r ExecRunner) Run(ctx context.Context, name string, args ...string) (Resul
 	}
 	err := cmd.Run()
 	result := Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
+	if r.Log != nil && len(result.Stderr) > 0 {
+		fmt.Fprintf(r.Log, "stderr:\n%s\n", bytes.TrimSpace(result.Stderr))
+	}
 	if err != nil {
+		if r.Log != nil {
+			fmt.Fprintf(r.Log, "exit: %v\n", err)
+		}
 		if errors.Is(err, exec.ErrNotFound) {
 			return result, fmt.Errorf("Error: %s is missing.\nFix: brew install %s", name, brewPackage(name))
 		}
 		return result, fmt.Errorf("%s failed: %w\n%s", name, err, bytes.TrimSpace(result.Stderr))
 	}
 	return result, nil
+}
+
+func quoteArgs(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, strconv.Quote(arg))
+	}
+	return strings.Join(quoted, " ")
 }
 
 func LookPath(name string) bool {
