@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/devosurf/cuescribe/internal/progress"
 )
 
 type Result struct {
@@ -21,14 +23,20 @@ type CommandRunner interface {
 }
 
 type ExecRunner struct {
-	Verbose bool
-	Stderr  io.Writer
-	Log     io.Writer
+	Verbose  bool
+	Stderr   io.Writer
+	Log      io.Writer
+	Progress io.Writer
 }
 
 func (r ExecRunner) Run(ctx context.Context, name string, args ...string) (Result, error) {
 	if r.Log != nil {
 		fmt.Fprintf(r.Log, "$ %s %s\n", name, quoteArgs(args))
+	}
+	var spinner *progress.Spinner
+	startLabel, doneLabel := progressLabels(name, args)
+	if r.Progress != nil && !r.Verbose && startLabel != "" {
+		spinner = progress.StartSpinner(r.Progress, startLabel)
 	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	var stdout bytes.Buffer
@@ -40,6 +48,13 @@ func (r ExecRunner) Run(ctx context.Context, name string, args ...string) (Resul
 		cmd.Stderr = &stderr
 	}
 	err := cmd.Run()
+	if spinner != nil {
+		if err == nil {
+			spinner.Done(doneLabel)
+		} else {
+			spinner.Done("")
+		}
+	}
 	result := Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
 	if r.Log != nil && len(result.Stderr) > 0 {
 		fmt.Fprintf(r.Log, "stderr:\n%s\n", bytes.TrimSpace(result.Stderr))
@@ -54,6 +69,31 @@ func (r ExecRunner) Run(ctx context.Context, name string, args ...string) (Resul
 		return result, fmt.Errorf("%s failed: %w\n%s", name, err, bytes.TrimSpace(result.Stderr))
 	}
 	return result, nil
+}
+
+func progressLabels(name string, args []string) (string, string) {
+	switch name {
+	case "yt-dlp":
+		if containsArg(args, "--dump-json") {
+			return "Fetching media metadata", "Fetched media metadata"
+		}
+		return "Downloading media", "Downloaded media"
+	case "ffmpeg":
+		return "Normalizing audio", "Normalized audio"
+	case "whisper-cli":
+		return "Transcribing audio", "Transcribed audio"
+	default:
+		return "Running " + name, "Finished " + name
+	}
+}
+
+func containsArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
 }
 
 func quoteArgs(args []string) string {

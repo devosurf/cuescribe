@@ -74,7 +74,7 @@ if [ -z "$binary_url" ] || [ -z "$binary_sha256" ]; then
 fi
 
 echo "downloading binary: $binary_url"
-curl -fL "$binary_url" -o "$binary"
+curl -fL --progress-bar "$binary_url" -o "$binary"
 
 actual_sha256="$(shasum -a 256 "$binary" | awk '{print $1}')"
 if [ "$actual_sha256" != "$binary_sha256" ]; then

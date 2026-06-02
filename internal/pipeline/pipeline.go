@@ -13,6 +13,7 @@ import (
 
 	"github.com/devosurf/cuescribe/internal/audio"
 	"github.com/devosurf/cuescribe/internal/config"
+	"github.com/devosurf/cuescribe/internal/progress"
 	"github.com/devosurf/cuescribe/internal/runner"
 	"github.com/devosurf/cuescribe/internal/subtitles"
 	"github.com/devosurf/cuescribe/internal/transcript"
@@ -29,6 +30,7 @@ type Options struct {
 	Paths        config.Paths
 	PlatformOS   string
 	PlatformArch string
+	Progress     io.Writer
 }
 
 type Pipeline struct {
@@ -62,27 +64,38 @@ func (p Pipeline) Run(ctx context.Context, opts Options) (transcript.Document, e
 		if info, err := os.Stat(opts.Input); err == nil && info.IsDir() {
 			return transcript.Document{}, fmt.Errorf("Error: directories are not supported.\nFix: pass one media file")
 		}
+		progress.Step(opts.Progress, "Using local media file")
 		return p.fromAudio(ctx, opts, opts.Input, "", "", nil)
 	}
 	md, err := ytdlp.FetchMetadata(ctx, p.Runner, opts.Input, youtubeCookies(opts.Input, opts.Config.Cookies))
 	if err != nil {
 		return transcript.Document{}, err
 	}
+	if md.Title != "" {
+		progress.Step(opts.Progress, "Found media: %s", md.Title)
+	}
 	if md.IsLive || md.LiveStatus == "is_live" || md.LiveStatus == "is_upcoming" {
 		return transcript.Document{}, fmt.Errorf("Error: active livestreams are not supported.\nFix: run Cuescribe after the stream has ended")
 	}
 	if source == "auto" || source == "subs" {
 		if selection, ok := ytdlp.SelectSubtitle(md, lang, subsMode, opts.Translate); ok {
+			progress.Step(opts.Progress, "Using %s subtitles (%s)", selection.Kind, selection.Lang)
 			return p.fromSubtitles(ctx, opts, md, selection)
 		}
 		if source == "subs" {
 			return transcript.Document{}, fmt.Errorf("Error: no compatible subtitles found.\nFix: use --source auto or --source audio")
 		}
 	}
+	if source == "audio" {
+		progress.Step(opts.Progress, "Using audio transcription")
+	} else {
+		progress.Step(opts.Progress, "No matching subtitles; using audio transcription")
+	}
 	return p.fromDownloadedAudio(ctx, opts, md)
 }
 
 func (p Pipeline) fromSubtitles(ctx context.Context, opts Options, md ytdlp.Metadata, selection ytdlp.SubtitleSelection) (transcript.Document, error) {
+	progress.Step(opts.Progress, "Downloading subtitles")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, selection.URL, nil)
 	if err != nil {
 		return transcript.Document{}, err
@@ -95,6 +108,7 @@ func (p Pipeline) fromSubtitles(ctx context.Context, opts Options, md ytdlp.Meta
 	if resp.StatusCode != http.StatusOK {
 		return transcript.Document{}, fmt.Errorf("subtitle download failed: %s", resp.Status)
 	}
+	progress.Step(opts.Progress, "Parsing subtitles")
 	var segments []transcript.Segment
 	switch selection.Ext {
 	case "srt":
@@ -141,10 +155,14 @@ func (p Pipeline) fromAudio(ctx context.Context, opts Options, mediaPath, title,
 			return transcript.Document{}, err
 		}
 		lang := normalizeDefault(opts.Lang, "auto")
+		if opts.Config.Model.Name != "" {
+			progress.Step(opts.Progress, "Using Whisper model: %s", opts.Config.Model.Name)
+		}
 		segments, detectedLanguage, err := audio.Transcribe(ctx, p.Runner, wavPath, dir, lang, opts.Translate, opts.Config.Model)
 		if err != nil {
 			return transcript.Document{}, err
 		}
+		progress.Step(opts.Progress, "Parsed %d transcript segments", len(segments))
 		if title == "" {
 			title = titleFromPath(mediaPath)
 		}

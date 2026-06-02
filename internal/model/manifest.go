@@ -9,7 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
+
+	"github.com/devosurf/cuescribe/internal/progress"
 )
 
 type Entry struct {
@@ -91,13 +92,13 @@ func SHA256File(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func Download(ctx context.Context, entry Entry, dest string, progress io.Writer) error {
+func Download(ctx context.Context, entry Entry, dest string, out io.Writer) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
 	if _, err := os.Stat(dest); err == nil {
 		if err := VerifyFile(dest, entry.SHA256); err == nil {
-			fmt.Fprintf(progress, "model already present: %s\n", dest)
+			fmt.Fprintf(out, "model already present: %s\n", dest)
 			return nil
 		}
 	}
@@ -134,22 +135,25 @@ func Download(ctx context.Context, entry Entry, dest string, progress io.Writer)
 		return err
 	}
 	defer f.Close()
-	fmt.Fprintf(progress, "downloading %s to %s\n", entry.Name, dest)
+	fmt.Fprintf(out, "model: %s (%s)\n", entry.Name, progress.HumanBytes(entry.Size))
+	fmt.Fprintf(out, "destination: %s\n", dest)
 	if start > 0 {
-		fmt.Fprintf(progress, "resuming at %d bytes\n", start)
+		fmt.Fprintf(out, "resuming at %s\n", progress.HumanBytes(start))
 	}
-	written, err := copyWithProgress(f, resp.Body, progress, start, entry.Size)
+	bar := progress.NewBar(out, "Downloading model", entry.Size)
+	written, err := copyWithProgress(f, resp.Body, bar, start)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(progress, "downloaded %d bytes; verifying checksum\n", written)
+	bar.Finish(fmt.Sprintf("downloaded %s", progress.HumanBytes(written)))
+	progress.Step(out, "Verifying checksum")
 	if err := VerifyFile(partPath, entry.SHA256); err != nil {
 		return err
 	}
 	if err := os.Rename(partPath, dest); err != nil {
 		return err
 	}
-	fmt.Fprintf(progress, "model installed: %s\n", dest)
+	fmt.Fprintf(out, "model installed: %s\n", dest)
 	return nil
 }
 
@@ -161,10 +165,12 @@ func fileSize(path string) int64 {
 	return info.Size()
 }
 
-func copyWithProgress(dst io.Writer, src io.Reader, progress io.Writer, start, total int64) (int64, error) {
+func copyWithProgress(dst io.Writer, src io.Reader, bar *progress.Bar, start int64) (int64, error) {
 	buf := make([]byte, 1024*1024)
 	written := start
-	last := time.Now()
+	if bar != nil {
+		bar.Start(start)
+	}
 	for {
 		nr, er := src.Read(buf)
 		if nr > 0 {
@@ -176,9 +182,8 @@ func copyWithProgress(dst io.Writer, src io.Reader, progress io.Writer, start, t
 				return written, io.ErrShortWrite
 			}
 			written += int64(nw)
-			if total > 0 && time.Since(last) > 2*time.Second {
-				fmt.Fprintf(progress, "%d/%d bytes\n", written, total)
-				last = time.Now()
+			if bar != nil {
+				bar.Set(written)
 			}
 		}
 		if er == io.EOF {

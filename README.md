@@ -84,3 +84,5 @@ cuescribe uninstall --yes
 Config lives at `~/.config/cuescribe/config.toml`, install state at `~/.local/state/cuescribe/install.toml`, models under `~/.local/share/cuescribe/`, and logs/cache under `~/.cache/cuescribe/`.
 
 Interactive setup detects installed browsers, prefers the macOS default browser when supported, and lists Chrome profiles when more than one is available.
+
+Downloads show human-readable progress bars, and transcript runs print concise status for metadata, download, normalization, transcription, and output steps.

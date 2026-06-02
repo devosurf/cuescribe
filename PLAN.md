@@ -190,6 +190,13 @@ cuescribe config cookies
 
 Default model: multilingual `small`, downloaded during setup, checksum verified, resumable, and stored by Cuescribe.
 
+Downloads and long-running operations should provide concise terminal feedback by default:
+
+- Use human-readable progress bars for release binary, model, and self-update downloads.
+- Use status/spinner output for metadata lookup, media download, audio normalization, transcription, subtitle parsing, and output writing.
+- Keep generated Markdown/JSON clean; progress and status messages go to stderr during transcript generation.
+- Avoid raw byte counter lines such as `123/456 bytes`.
+
 Model picker:
 
 - `tiny`

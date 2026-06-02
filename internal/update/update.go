@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devosurf/cuescribe/internal/model"
+	"github.com/devosurf/cuescribe/internal/progress"
 )
 
 type Manifest struct {
@@ -21,10 +22,11 @@ type Manifest struct {
 	BinarySHA256 string `json:"binary_sha256"`
 }
 
-func SelfUpdate(ctx context.Context, version string, progress io.Writer) error {
+func SelfUpdate(ctx context.Context, version string, out io.Writer) error {
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
 		return fmt.Errorf("Error: unsupported platform %s/%s.\nFix: Cuescribe v1 supports macOS Apple Silicon only", runtime.GOOS, runtime.GOARCH)
 	}
+	progress.Step(out, "Checking release manifest")
 	manifest, err := FetchManifest(ctx, version)
 	if err != nil {
 		return err
@@ -45,10 +47,10 @@ func SelfUpdate(ctx context.Context, version string, progress io.Writer) error {
 	}
 	defer os.RemoveAll(tmp)
 	binaryPath := filepath.Join(tmp, "cuescribe")
-	fmt.Fprintf(progress, "downloading %s\n", manifest.BinaryURL)
-	if err := downloadFile(ctx, manifest.BinaryURL, binaryPath); err != nil {
+	if err := downloadFile(ctx, manifest.BinaryURL, binaryPath, out); err != nil {
 		return err
 	}
+	progress.Step(out, "Verifying checksum")
 	if err := model.VerifyFile(binaryPath, manifest.BinarySHA256); err != nil {
 		return err
 	}
@@ -65,7 +67,7 @@ func SelfUpdate(ctx context.Context, version string, progress io.Writer) error {
 		return err
 	}
 	_ = os.Remove(backup)
-	fmt.Fprintf(progress, "updated %s to %s\n", exe, manifest.Version)
+	fmt.Fprintf(out, "updated %s to %s\n", exe, manifest.Version)
 	return nil
 }
 
@@ -98,7 +100,7 @@ func manifestURL(version string) string {
 	return fmt.Sprintf("https://github.com/devosurf/cuescribe/releases/download/%s/manifest.json", version)
 }
 
-func downloadFile(ctx context.Context, url, path string) error {
+func downloadFile(ctx context.Context, url, path string, out io.Writer) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -117,6 +119,39 @@ func downloadFile(ctx context.Context, url, path string) error {
 		return err
 	}
 	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
+	bar := progress.NewBar(out, "Downloading update", resp.ContentLength)
+	bar.Start(0)
+	written, err := copyWithProgress(f, resp.Body, bar)
+	if err != nil {
+		return err
+	}
+	bar.Finish(fmt.Sprintf("downloaded %s", progress.HumanBytes(written)))
+	return nil
+}
+
+func copyWithProgress(dst io.Writer, src io.Reader, bar *progress.Bar) (int64, error) {
+	buf := make([]byte, 1024*1024)
+	var written int64
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			nw, ew := dst.Write(buf[:nr])
+			if ew != nil {
+				return written, ew
+			}
+			if nr != nw {
+				return written, io.ErrShortWrite
+			}
+			written += int64(nw)
+			if bar != nil {
+				bar.Set(written)
+			}
+		}
+		if er == io.EOF {
+			return written, nil
+		}
+		if er != nil {
+			return written, er
+		}
+	}
 }

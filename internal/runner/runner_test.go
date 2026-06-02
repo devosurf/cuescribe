@@ -21,3 +21,15 @@ func TestExecRunnerWritesCommandAndStderrToLog(t *testing.T) {
 		t.Fatalf("log missing stderr: %q", got)
 	}
 }
+
+func TestExecRunnerWritesProgressWhenConfigured(t *testing.T) {
+	var out bytes.Buffer
+	_, err := ExecRunner{Progress: &out}.Run(context.Background(), "sh", "-c", "true")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "Running sh") || !strings.Contains(got, "Finished sh") {
+		t.Fatalf("progress output = %q", got)
+	}
+}

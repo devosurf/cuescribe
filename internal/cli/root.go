@@ -19,6 +19,7 @@ import (
 	"github.com/devosurf/cuescribe/internal/model"
 	"github.com/devosurf/cuescribe/internal/output"
 	"github.com/devosurf/cuescribe/internal/pipeline"
+	"github.com/devosurf/cuescribe/internal/progress"
 	"github.com/devosurf/cuescribe/internal/runner"
 	appupdate "github.com/devosurf/cuescribe/internal/update"
 	"github.com/devosurf/cuescribe/internal/version"
@@ -79,7 +80,8 @@ func NewRootCommand() *cobra.Command {
 			if opts.verbose {
 				fmt.Fprintf(cmd.ErrOrStderr(), "log: %s\n", logPath)
 			}
-			doc, err := pipeline.New(runner.ExecRunner{Verbose: opts.verbose, Stderr: cmd.ErrOrStderr(), Log: logFile}).Run(cmd.Context(), pipeline.Options{
+			progressOut := cmd.ErrOrStderr()
+			doc, err := pipeline.New(runner.ExecRunner{Verbose: opts.verbose, Stderr: cmd.ErrOrStderr(), Log: logFile, Progress: progressOut}).Run(cmd.Context(), pipeline.Options{
 				Input:     args[0],
 				Source:    opts.source,
 				Subs:      opts.subs,
@@ -87,10 +89,12 @@ func NewRootCommand() *cobra.Command {
 				Translate: opts.translate,
 				Config:    cfg,
 				Paths:     paths,
+				Progress:  progressOut,
 			})
 			if err != nil {
 				return err
 			}
+			progress.Step(progressOut, "Writing output")
 			written, err := output.Write(doc, output.Options{
 				Format:         output.Format(opts.format),
 				NoTimestamps:   opts.noTimestamps,
