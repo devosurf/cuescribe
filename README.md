@@ -74,6 +74,7 @@ cuescribe setup
 cuescribe setup deps
 cuescribe setup model
 cuescribe setup cookies --browser safari
+cuescribe setup cookies --browser chrome --profile "Profile 1"
 cuescribe doctor
 cuescribe version --json
 cuescribe self-update
@@ -81,3 +82,5 @@ cuescribe uninstall --yes
 ```
 
 Config lives at `~/.config/cuescribe/config.toml`, install state at `~/.local/state/cuescribe/install.toml`, models under `~/.local/share/cuescribe/`, and logs/cache under `~/.cache/cuescribe/`.
+
+Interactive setup detects installed browsers, prefers the macOS default browser when supported, and lists Chrome profiles when more than one is available.

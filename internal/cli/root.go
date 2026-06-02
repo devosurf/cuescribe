@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -262,16 +265,22 @@ func runSetupCookies(cmd *cobra.Command, browser, profile string, disable bool) 
 	if disable {
 		cfg.Cookies = config.CookieConfig{}
 	} else if browser != "" {
+		browser = normalizeBrowserName(browser)
 		cfg.Cookies.Enabled = true
 		cfg.Cookies.Browser = browser
 		cfg.Cookies.Profile = profile
 	} else if isTerminal(os.Stdin) {
 		detected := detectBrowsers()
+		defaultBrowser := detectDefaultBrowser()
+		detected = mergeDetectedDefaultBrowser(detected, defaultBrowser)
 		if len(detected) == 0 {
 			fmt.Fprintln(cmd.OutOrStdout(), "no supported browsers detected; cookies disabled")
 			return config.Save(paths.ConfigFile, cfg)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "detected browsers: %s\n", strings.Join(detected, ", "))
+		if containsString(detected, defaultBrowser) {
+			fmt.Fprintf(cmd.OutOrStdout(), "default browser: %s\n", defaultBrowser)
+		}
 		fmt.Fprint(cmd.OutOrStdout(), "enable YouTube browser cookies? [y/N] ")
 		reader := bufio.NewReader(cmd.InOrStdin())
 		answer, _ := reader.ReadString('\n')
@@ -280,7 +289,7 @@ func runSetupCookies(cmd *cobra.Command, browser, profile string, disable bool) 
 			fmt.Fprintln(cmd.OutOrStdout(), "cookies disabled")
 			return config.Save(paths.ConfigFile, cfg)
 		}
-		browser = detected[0]
+		browser = preferredBrowser(detected, defaultBrowser)
 		if len(detected) > 1 {
 			fmt.Fprintf(cmd.OutOrStdout(), "browser [%s]: ", browser)
 			selected, _ := reader.ReadString('\n')
@@ -289,11 +298,11 @@ func runSetupCookies(cmd *cobra.Command, browser, profile string, disable bool) 
 				browser = selected
 			}
 		}
-		fmt.Fprint(cmd.OutOrStdout(), "profile (optional): ")
-		selectedProfile, _ := reader.ReadString('\n')
-		selectedProfile = strings.TrimSpace(selectedProfile)
-		if selectedProfile != "" {
-			profile = selectedProfile
+		browser = normalizeBrowserName(browser)
+		if browser == "chrome" {
+			profile = promptChromeProfile(cmd, reader)
+		} else {
+			profile = promptOptionalProfile(cmd, reader)
 		}
 		cfg.Cookies.Enabled = true
 		cfg.Cookies.Browser = browser
@@ -612,24 +621,231 @@ func removeInstalledBinary(cmd *cobra.Command) error {
 	return nil
 }
 
+type browserCandidate struct {
+	name     string
+	path     string
+	bundleID string
+}
+
+var browserCandidates = []browserCandidate{
+	{"safari", "/Applications/Safari.app", "com.apple.Safari"},
+	{"chrome", "/Applications/Google Chrome.app", "com.google.Chrome"},
+	{"firefox", "/Applications/Firefox.app", "org.mozilla.firefox"},
+	{"brave", "/Applications/Brave Browser.app", "com.brave.Browser"},
+	{"edge", "/Applications/Microsoft Edge.app", "com.microsoft.edgemac"},
+}
+
 func detectBrowsers() []string {
-	candidates := []struct {
-		name string
-		path string
-	}{
-		{"safari", "/Applications/Safari.app"},
-		{"chrome", "/Applications/Google Chrome.app"},
-		{"firefox", "/Applications/Firefox.app"},
-		{"brave", "/Applications/Brave Browser.app"},
-		{"edge", "/Applications/Microsoft Edge.app"},
-	}
 	var found []string
-	for _, candidate := range candidates {
+	for _, candidate := range browserCandidates {
 		if fileExists(candidate.path) {
 			found = append(found, candidate.name)
 		}
 	}
 	return found
+}
+
+func detectDefaultBrowser() string {
+	script := `ObjC.import("AppKit"); ObjC.import("Foundation"); var appURL=$.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL($.NSURL.URLWithString("https://example.com")); var bundle=$.NSBundle.bundleWithURL(appURL); bundle ? ObjC.unwrap(bundle.bundleIdentifier) : "";`
+	out, err := exec.Command("/usr/bin/osascript", "-l", "JavaScript", "-e", script).Output()
+	if err != nil {
+		return ""
+	}
+	bundleID := strings.TrimSpace(string(out))
+	for _, candidate := range browserCandidates {
+		if strings.EqualFold(candidate.bundleID, bundleID) {
+			return candidate.name
+		}
+	}
+	return ""
+}
+
+func preferredBrowser(detected []string, defaultBrowser string) string {
+	if containsString(detected, defaultBrowser) {
+		return defaultBrowser
+	}
+	if len(detected) == 0 {
+		return ""
+	}
+	return detected[0]
+}
+
+func mergeDetectedDefaultBrowser(detected []string, defaultBrowser string) []string {
+	if defaultBrowser == "" || containsString(detected, defaultBrowser) {
+		return detected
+	}
+	return append([]string{defaultBrowser}, detected...)
+}
+
+func normalizeBrowserName(value string) string {
+	trimmed := strings.TrimSpace(value)
+	switch strings.ToLower(trimmed) {
+	case "google chrome", "chrome":
+		return "chrome"
+	case "apple safari", "safari":
+		return "safari"
+	case "mozilla firefox", "firefox":
+		return "firefox"
+	case "brave browser", "brave":
+		return "brave"
+	case "microsoft edge", "edge":
+		return "edge"
+	default:
+		return trimmed
+	}
+}
+
+func containsString(items []string, value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, item := range items {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
+type browserProfile struct {
+	ID   string
+	Name string
+}
+
+func (p browserProfile) label() string {
+	if p.Name == "" || p.Name == p.ID {
+		return p.ID
+	}
+	return fmt.Sprintf("%s (%s)", p.Name, p.ID)
+}
+
+func promptChromeProfile(cmd *cobra.Command, reader *bufio.Reader) string {
+	profiles := detectChromeProfiles()
+	if len(profiles) == 0 {
+		return promptOptionalProfile(cmd, reader)
+	}
+	if len(profiles) == 1 {
+		fmt.Fprintf(cmd.OutOrStdout(), "chrome profile: %s\n", profiles[0].label())
+		return profiles[0].ID
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "chrome profiles:")
+	for i, profile := range profiles {
+		fmt.Fprintf(cmd.OutOrStdout(), "%d. %s\n", i+1, profile.label())
+	}
+	defaultProfile := profiles[0]
+	fmt.Fprintf(cmd.OutOrStdout(), "profile [%s]: ", defaultProfile.ID)
+	selected, _ := reader.ReadString('\n')
+	return resolveChromeProfileSelection(profiles, selected)
+}
+
+func resolveChromeProfileSelection(profiles []browserProfile, selected string) string {
+	if len(profiles) == 0 {
+		return strings.TrimSpace(selected)
+	}
+	selected = strings.TrimSpace(selected)
+	if selected == "" {
+		return profiles[0].ID
+	}
+	if idx, err := strconv.Atoi(selected); err == nil && idx >= 1 && idx <= len(profiles) {
+		return profiles[idx-1].ID
+	}
+	for _, profile := range profiles {
+		if strings.EqualFold(selected, profile.ID) || strings.EqualFold(selected, profile.Name) {
+			return profile.ID
+		}
+	}
+	return selected
+}
+
+func promptOptionalProfile(cmd *cobra.Command, reader *bufio.Reader) string {
+	fmt.Fprint(cmd.OutOrStdout(), "profile (optional): ")
+	selected, _ := reader.ReadString('\n')
+	return strings.TrimSpace(selected)
+}
+
+func detectChromeProfiles() []browserProfile {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	return detectChromeProfilesInHome(home)
+}
+
+func detectChromeProfilesInHome(home string) []browserProfile {
+	root := filepath.Join(home, "Library", "Application Support", "Google", "Chrome")
+	profiles := chromeProfilesFromLocalState(filepath.Join(root, "Local State"))
+	if len(profiles) > 0 {
+		return profiles
+	}
+	return chromeProfilesFromDirs(root)
+}
+
+func chromeProfilesFromLocalState(path string) []browserProfile {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var state struct {
+		Profile struct {
+			InfoCache map[string]struct {
+				Name string `json:"name"`
+			} `json:"info_cache"`
+		} `json:"profile"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil
+	}
+	var profiles []browserProfile
+	for id, info := range state.Profile.InfoCache {
+		if isChromeProfileID(id) {
+			profiles = append(profiles, browserProfile{ID: id, Name: info.Name})
+		}
+	}
+	sortChromeProfiles(profiles)
+	return profiles
+}
+
+func chromeProfilesFromDirs(root string) []browserProfile {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var profiles []browserProfile
+	for _, entry := range entries {
+		if entry.IsDir() && isChromeProfileID(entry.Name()) {
+			profiles = append(profiles, browserProfile{ID: entry.Name(), Name: entry.Name()})
+		}
+	}
+	sortChromeProfiles(profiles)
+	return profiles
+}
+
+func sortChromeProfiles(profiles []browserProfile) {
+	sort.Slice(profiles, func(i, j int) bool {
+		left := chromeProfileRank(profiles[i].ID)
+		right := chromeProfileRank(profiles[j].ID)
+		if left != right {
+			return left < right
+		}
+		return profiles[i].ID < profiles[j].ID
+	})
+}
+
+func chromeProfileRank(id string) int {
+	if id == "Default" {
+		return 0
+	}
+	if strings.HasPrefix(id, "Profile ") {
+		n, err := strconv.Atoi(strings.TrimPrefix(id, "Profile "))
+		if err == nil {
+			return 100 + n
+		}
+	}
+	return 1000
+}
+
+func isChromeProfileID(id string) bool {
+	return id == "Default" || strings.HasPrefix(id, "Profile ")
 }
 
 func isTerminal(file *os.File) bool {

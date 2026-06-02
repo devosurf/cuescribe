@@ -207,7 +207,9 @@ Interactive setup can enable YouTube browser cookies after explicit consent.
 Behavior:
 
 - Detect installed browsers.
+- Detect the macOS default browser for HTTPS and prefer it when it is supported and installed.
 - Select one browser/profile.
+- If Chrome is selected and multiple Chrome profiles are detected, list the profiles and prompt for one.
 - Store only browser/profile, not cookies.
 - Automatically attach configured browser cookies to every YouTube call.
 - Do not attach cookies to non-YouTube URLs by default.
