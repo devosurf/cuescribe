@@ -73,6 +73,44 @@ func TestWritePreventsCollisionWithoutForce(t *testing.T) {
 	}
 }
 
+func TestWriteDefaultsToTitleFile(t *testing.T) {
+	dir := t.TempDir()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(old)
+
+	doc := transcript.Document{Title: "Upper Management Meeting.", Mode: transcript.ModeSubtitlesManual}
+	written, err := Write(doc, Options{Format: FormatMarkdown}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if written != "Upper Management Meeting.md" {
+		t.Fatalf("written = %q", written)
+	}
+	if _, err := os.Stat(filepath.Join(dir, written)); err != nil {
+		t.Fatalf("default output file missing: %v", err)
+	}
+}
+
+func TestWriteDashOutputsToStdout(t *testing.T) {
+	var stdout bytes.Buffer
+	written, err := Write(transcript.Document{Title: "Video", Mode: transcript.ModeAudio}, Options{Format: FormatMarkdown, OutputPath: "-"}, &stdout)
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if written != "" {
+		t.Fatalf("written = %q, want empty stdout marker", written)
+	}
+	if !strings.Contains(stdout.String(), "# Video") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
 func TestWriteUsesSanitizedTitleForDirectoryOutput(t *testing.T) {
 	dir := t.TempDir()
 	doc := transcript.Document{Title: "Bad/Name:*?", Mode: transcript.ModeAudio}

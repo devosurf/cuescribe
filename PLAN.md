@@ -103,6 +103,8 @@ Supported output flags:
 --force
 ```
 
+When `-o` is omitted, write a title-based output file in the current directory, such as `Video Title.md` or `Video Title.json`. Use `-o -` to print to stdout.
+
 Default timestamped Markdown is one segment per line. `--no-timestamps` affects Markdown only and should produce readable paragraphs. JSON always keeps segment timing.
 
 JSON has an independent schema version:

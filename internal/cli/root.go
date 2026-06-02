@@ -112,7 +112,7 @@ func NewRootCommand() *cobra.Command {
 	cmd.Flags().StringVar(&opts.format, "format", "markdown", "output format: markdown or json")
 	cmd.Flags().BoolVar(&opts.noTimestamps, "no-timestamps", false, "omit timestamps in Markdown output")
 	cmd.Flags().BoolVar(&opts.timestampLinks, "timestamp-links", false, "link Markdown timestamps to the source URL")
-	cmd.Flags().StringVarP(&opts.outputPath, "output", "o", "", "output file or directory")
+	cmd.Flags().StringVarP(&opts.outputPath, "output", "o", "", "output file or directory; use - for stdout")
 	cmd.Flags().BoolVar(&opts.mkdir, "mkdir", false, "create output directories")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "overwrite an existing output file")
 	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", false, "show raw child process stderr")

@@ -48,6 +48,7 @@ cuescribe ./lecture.mp4 -o lecture.md
 cuescribe URL --source audio
 cuescribe URL --translate
 cuescribe URL --format json -o transcript.json
+cuescribe URL -o -
 ```
 
 Common flags:
@@ -63,6 +64,8 @@ Common flags:
 --mkdir
 --force
 ```
+
+When `-o` is omitted, Cuescribe writes a title-based file in the current directory, for example `Video Title.md`. Use `-o -` to print to stdout.
 
 ## Setup And Admin
 

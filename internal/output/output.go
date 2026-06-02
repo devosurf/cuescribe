@@ -37,7 +37,7 @@ func Write(doc transcript.Document, opts Options, stdout io.Writer) (string, err
 	if err != nil {
 		return "", err
 	}
-	if opts.OutputPath == "" {
+	if opts.OutputPath == "-" {
 		_, err := stdout.Write(data)
 		return "", err
 	}
@@ -212,6 +212,9 @@ func timestampURL(source string, d time.Duration) string {
 }
 
 func resolvePath(outputPath string, doc transcript.Document, ext string) (string, error) {
+	if outputPath == "" {
+		return sanitizeFilename(doc.Title) + ext, nil
+	}
 	if strings.HasSuffix(outputPath, string(filepath.Separator)) {
 		return filepath.Join(outputPath, sanitizeFilename(doc.Title)+ext), nil
 	}
