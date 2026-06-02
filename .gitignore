@@ -1,0 +1,9 @@
+.DS_Store
+
+# Go build/test artifacts
+*.test
+*.out
+
+# Release binaries are produced by CI.
+/dist/cuescribe-*
+!/dist/manifest.example.json
