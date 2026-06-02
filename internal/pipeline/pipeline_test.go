@@ -109,6 +109,23 @@ func TestRunLocalFileUsesAudioPipeline(t *testing.T) {
 	}
 }
 
+func TestRunRejectsLocalDirectory(t *testing.T) {
+	paths := config.PathsForHome(t.TempDir())
+	_, err := New(fakeRunner(func(ctx context.Context, name string, args ...string) (runner.Result, error) {
+		t.Fatalf("unexpected command: %s %v", name, args)
+		return runner.Result{}, nil
+	})).Run(context.Background(), Options{
+		Input:        t.TempDir(),
+		Config:       config.Default(paths),
+		Paths:        paths,
+		PlatformOS:   "darwin",
+		PlatformArch: "arm64",
+	})
+	if err == nil || !strings.Contains(err.Error(), "directories are not supported") {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
 func contains(args []string, value string) bool {
 	for _, arg := range args {
 		if arg == value {

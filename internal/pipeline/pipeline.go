@@ -59,6 +59,9 @@ func (p Pipeline) Run(ctx context.Context, opts Options) (transcript.Document, e
 		if source == "subs" {
 			return transcript.Document{}, fmt.Errorf("Error: local files do not support --source subs.\nFix: use --source audio or omit --source")
 		}
+		if info, err := os.Stat(opts.Input); err == nil && info.IsDir() {
+			return transcript.Document{}, fmt.Errorf("Error: directories are not supported.\nFix: pass one media file")
+		}
 		return p.fromAudio(ctx, opts, opts.Input, "", "", nil)
 	}
 	md, err := ytdlp.FetchMetadata(ctx, p.Runner, opts.Input, youtubeCookies(opts.Input, opts.Config.Cookies))
