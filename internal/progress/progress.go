@@ -156,6 +156,16 @@ type Spinner struct {
 	wg       sync.WaitGroup
 }
 
+type spinnerStyle struct {
+	interval time.Duration
+	frames   []string
+}
+
+var defaultSpinner = spinnerStyle{
+	interval: 80 * time.Millisecond,
+	frames:   []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"},
+}
+
 func StartSpinner(w io.Writer, label string) *Spinner {
 	s := &Spinner{
 		w:        w,
@@ -173,21 +183,29 @@ func StartSpinner(w io.Writer, label string) *Spinner {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		frames := []string{"|", "/", "-", "\\"}
-		ticker := time.NewTicker(120 * time.Millisecond)
+		ticker := time.NewTicker(defaultSpinner.interval)
 		defer ticker.Stop()
 		i := 0
+		renderSpinnerFrame(w, label, defaultSpinner.frames, i)
+		i++
 		for {
 			select {
 			case <-s.done:
 				return
 			case <-ticker.C:
-				fmt.Fprintf(w, "\r%s %s", frames[i%len(frames)], label)
+				renderSpinnerFrame(w, label, defaultSpinner.frames, i)
 				i++
 			}
 		}
 	}()
 	return s
+}
+
+func renderSpinnerFrame(w io.Writer, label string, frames []string, index int) {
+	if len(frames) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\r\033[K%s %s", frames[index%len(frames)], label)
 }
 
 func (s *Spinner) Done(message string) {

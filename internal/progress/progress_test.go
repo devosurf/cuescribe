@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHumanBytes(t *testing.T) {
@@ -40,5 +41,17 @@ func TestSpinnerWritesMessagesForNonTerminal(t *testing.T) {
 	got := out.String()
 	if !strings.Contains(got, "Transcribing audio") || !strings.Contains(got, "Transcribed audio") {
 		t.Fatalf("spinner output = %q", got)
+	}
+}
+
+func TestRenderSpinnerFrameUsesDotsStyleFrames(t *testing.T) {
+	var out bytes.Buffer
+	renderSpinnerFrame(&out, "Working", defaultSpinner.frames, 0)
+	got := out.String()
+	if !strings.Contains(got, "⠋ Working") {
+		t.Fatalf("spinner frame = %q", got)
+	}
+	if defaultSpinner.interval != 80*time.Millisecond {
+		t.Fatalf("spinner interval = %s, want 80ms", defaultSpinner.interval)
 	}
 }

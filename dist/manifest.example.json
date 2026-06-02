@@ -1,7 +1,7 @@
 {
-  "version": "v0.1.4",
+  "version": "v0.1.5",
   "platform": "darwin-arm64",
-  "binary_url": "https://github.com/devosurf/cuescribe/releases/download/v0.1.4/cuescribe-darwin-arm64",
+  "binary_url": "https://github.com/devosurf/cuescribe/releases/download/v0.1.5/cuescribe-darwin-arm64",
   "binary_sha256": "<release-binary-sha256>",
   "models": [
     {
