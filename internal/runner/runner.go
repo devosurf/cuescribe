@@ -66,7 +66,18 @@ func (r ExecRunner) Run(ctx context.Context, name string, args ...string) (Resul
 		if errors.Is(err, exec.ErrNotFound) {
 			return result, fmt.Errorf("Error: %s is missing.\nFix: brew install %s", name, brewPackage(name))
 		}
-		return result, fmt.Errorf("%s failed: %w\n%s", name, err, bytes.TrimSpace(result.Stderr))
+		details := bytes.TrimSpace(result.Stderr)
+		output := bytes.TrimSpace(result.Stdout)
+		if len(details) == 0 && len(output) > 0 {
+			details = output
+		} else if len(details) > 0 && len(output) > 0 {
+			details = append(details, '\n')
+			details = append(details, output...)
+		}
+		if len(details) == 0 {
+			return result, fmt.Errorf("%s failed: %w", name, err)
+		}
+		return result, fmt.Errorf("%s failed: %w\n%s", name, err, details)
 	}
 	return result, nil
 }

@@ -33,3 +33,13 @@ func TestExecRunnerWritesProgressWhenConfigured(t *testing.T) {
 		t.Fatalf("progress output = %q", got)
 	}
 }
+
+func TestExecRunnerIncludesOutputInError(t *testing.T) {
+	_, err := ExecRunner{}.Run(context.Background(), "sh", "-c", "echo bad-stdout; echo bad-stderr >&2; exit 1")
+	if err == nil {
+		t.Fatal("Run() error = nil, want failure")
+	}
+	if !strings.Contains(err.Error(), "bad-stdout") || !strings.Contains(err.Error(), "bad-stderr") {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
