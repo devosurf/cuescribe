@@ -136,7 +136,7 @@ func TestRunUpgradeDepsRunsBrewUpgrade(t *testing.T) {
 	for _, name := range []string{"yt-dlp", "ffmpeg", "whisper-cli"} {
 		writeFakeExecutable(t, filepath.Join(binDir, name), "#!/bin/sh\nexit 0\n")
 	}
-	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$BREW_LOG\"\n")
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BREW_LOG\"\n")
 	logPath := filepath.Join(t.TempDir(), "brew.log")
 	t.Setenv("PATH", binDir)
 	t.Setenv("BREW_LOG", logPath)
@@ -154,10 +154,47 @@ func TestRunUpgradeDepsRunsBrewUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(data)
+	if !strings.Contains(got, "list") || !strings.Contains(got, "--versions") {
+		t.Fatalf("brew args = %q, expected list check", got)
+	}
 	for _, want := range []string{"upgrade", "yt-dlp", "ffmpeg", "whisper-cpp"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("brew args = %q, missing %q", got, want)
 		}
+	}
+}
+
+func TestRunUpgradeDepsInstallsMissingFormula(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell executables use /bin/sh")
+	}
+	binDir := t.TempDir()
+	for _, name := range []string{"yt-dlp", "ffmpeg", "whisper-cli"} {
+		writeFakeExecutable(t, filepath.Join(binDir, name), "#!/bin/sh\nexit 0\n")
+	}
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nif [ \"$1\" = \"list\" ] && [ \"$2\" = \"--versions\" ]; then\n  if [ \"$3\" = \"whisper-cpp\" ]; then\n    >&2 echo \"No such keg: whisper-cpp\"\n    exit 1\n  fi\nfi\nprintf '%s\\n' \"$@\" >> \"$BREW_LOG\"\nexit 0\n")
+	logPath := filepath.Join(t.TempDir(), "brew.log")
+	t.Setenv("PATH", binDir)
+	t.Setenv("BREW_LOG", logPath)
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	if err := runUpgradeDeps(context.Background(), cmd); err != nil {
+		t.Fatalf("runUpgradeDeps() error = %v; stderr = %q", err, errOut.String())
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "\ninstall\nwhisper-cpp\n") {
+		t.Fatalf("brew args = %q, expected install whisper-cpp", got)
+	}
+	if !strings.Contains(got, "\nupgrade\nyt-dlp\nffmpeg\n") {
+		t.Fatalf("brew args = %q, expected upgrade yt-dlp ffmpeg", got)
 	}
 }
 

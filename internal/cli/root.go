@@ -356,14 +356,49 @@ func installDependencies(ctx context.Context, cmd *cobra.Command, yes bool, name
 }
 
 func upgradeDependencies(ctx context.Context, cmd *cobra.Command, names []string) error {
-	if err := installDependencies(ctx, cmd, true, names); err != nil {
-		return err
-	}
 	if !runner.LookPath("brew") {
 		return fmt.Errorf("Error: Homebrew is missing.\nFix: install Homebrew, then run brew upgrade %s", strings.Join(brewPackages(names), " "))
 	}
-	args := append([]string{"upgrade"}, brewPackages(names)...)
+	packages := brewPackages(names)
+	install := []string{}
+	upgrade := []string{}
+	for _, pkg := range packages {
+		installed, err := isBrewPackageInstalled(ctx, pkg)
+		if err != nil {
+			return err
+		}
+		if installed {
+			upgrade = append(upgrade, pkg)
+		} else {
+			install = append(install, pkg)
+		}
+	}
+	if len(install) > 0 {
+		progress.Step(cmd.OutOrStdout(), "Installing dependencies")
+		if err := runBrewCommand(ctx, cmd, "install", install); err != nil {
+			return err
+		}
+	}
+	if len(upgrade) == 0 {
+		return nil
+	}
 	progress.Step(cmd.OutOrStdout(), "Upgrading dependencies")
+	return runBrewCommand(ctx, cmd, "upgrade", upgrade)
+}
+
+func isBrewPackageInstalled(ctx context.Context, pkg string) (bool, error) {
+	_, err := runner.ExecRunner{Verbose: false, Stderr: io.Discard}.Run(ctx, "brew", "list", "--versions", pkg)
+	if err != nil {
+		if strings.Contains(err.Error(), "is not installed") || strings.Contains(err.Error(), "No such keg") {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func runBrewCommand(ctx context.Context, cmd *cobra.Command, subcommand string, packages []string) error {
+	args := append([]string{subcommand}, packages...)
 	_, err := runner.ExecRunner{Verbose: true, Stderr: cmd.ErrOrStderr()}.Run(ctx, "brew", args...)
 	return err
 }
