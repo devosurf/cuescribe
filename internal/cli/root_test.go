@@ -128,6 +128,20 @@ func TestUpgradeCommandIsPrimaryAndSelfUpdateAliasWorks(t *testing.T) {
 	}
 }
 
+func TestUpgradeCommandHasSkipDependenciesFlag(t *testing.T) {
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"upgrade", "--help"})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(out.String(), "--skip-dependencies") {
+		t.Fatalf("upgrade help missing --skip-dependencies: %q", out.String())
+	}
+}
+
 func TestRunUpgradeDepsRunsBrewUpgrade(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake shell executables use /bin/sh")

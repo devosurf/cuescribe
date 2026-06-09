@@ -861,21 +861,26 @@ func newVersionCommand() *cobra.Command {
 
 func newUpgradeCommand() *cobra.Command {
 	var updateVersion string
+	var skipDependencies bool
 	cmd := &cobra.Command{
 		Use:     "upgrade",
 		Aliases: []string{"self-update"},
-		Short:   "Upgrade Cuescribe and Homebrew dependencies",
+		Short:   "Upgrade Cuescribe, and Homebrew dependencies by default",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := runUpgradeDeps(cmd.Context(), cmd); err != nil {
+			if err := appupdate.SelfUpdate(cmd.Context(), updateVersion, cmd.OutOrStdout()); err != nil {
 				return err
 			}
-			if err := appupdate.SelfUpdate(cmd.Context(), updateVersion, cmd.OutOrStdout()); err != nil {
+			if skipDependencies {
+				return saveInstallState(cmd)
+			}
+			if err := runUpgradeDeps(cmd.Context(), cmd); err != nil {
 				return err
 			}
 			return saveInstallState(cmd)
 		},
 	}
 	cmd.Flags().StringVar(&updateVersion, "version", "latest", "release version or latest")
+	cmd.Flags().BoolVar(&skipDependencies, "skip-dependencies", false, "only update the Cuescribe binary")
 	return cmd
 }
 
