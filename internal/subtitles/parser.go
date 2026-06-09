@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/devosurf/cuescribe/internal/transcript"
 )
@@ -70,7 +71,7 @@ func ParseVTT(r io.Reader) ([]transcript.Segment, error) {
 		}
 		segments = append(segments, transcript.Segment{Start: start, End: end, Text: text, Speaker: speaker})
 	}
-	return segments, nil
+	return collapseRollingCaptions(segments), nil
 }
 
 func ParseSRT(r io.Reader) ([]transcript.Segment, error) {
@@ -115,7 +116,7 @@ func ParseSRT(r io.Reader) ([]transcript.Segment, error) {
 		}
 		segments = append(segments, transcript.Segment{Start: start, End: end, Text: text, Speaker: speaker})
 	}
-	return segments, nil
+	return collapseRollingCaptions(segments), nil
 }
 
 func readLines(r io.Reader) ([]string, error) {
@@ -193,4 +194,92 @@ func cleanText(raw string) (string, string) {
 		text = strings.TrimSpace(match[2])
 	}
 	return strings.TrimSpace(text), speaker
+}
+
+func collapseRollingCaptions(segments []transcript.Segment) []transcript.Segment {
+	if !looksLikeRollingCaptions(segments) {
+		return segments
+	}
+	out := make([]transcript.Segment, 0, len(segments))
+	var emittedTail []string
+	lastSpeaker := ""
+	for _, segment := range segments {
+		words := strings.Fields(strings.TrimSpace(segment.Text))
+		if len(words) == 0 {
+			continue
+		}
+		if segment.Speaker != lastSpeaker {
+			emittedTail = nil
+			lastSpeaker = segment.Speaker
+		}
+		overlap := suffixPrefixOverlap(emittedTail, words)
+		if overlap == len(words) {
+			continue
+		}
+		segment.Text = strings.Join(words[overlap:], " ")
+		out = append(out, segment)
+		emittedTail = append(emittedTail, words[overlap:]...)
+		if len(emittedTail) > 80 {
+			emittedTail = emittedTail[len(emittedTail)-80:]
+		}
+	}
+	return out
+}
+
+func looksLikeRollingCaptions(segments []transcript.Segment) bool {
+	if len(segments) < 3 {
+		return false
+	}
+	overlappingPairs := 0
+	comparablePairs := 0
+	for i := 1; i < len(segments); i++ {
+		prev := segments[i-1]
+		current := segments[i]
+		if prev.Speaker != current.Speaker {
+			continue
+		}
+		comparablePairs++
+		prevWords := strings.Fields(prev.Text)
+		currentWords := strings.Fields(current.Text)
+		if rollingOverlap(prevWords, currentWords) {
+			overlappingPairs++
+		}
+	}
+	return overlappingPairs >= 2 && overlappingPairs*2 >= comparablePairs
+}
+
+func rollingOverlap(prevWords, currentWords []string) bool {
+	overlap := suffixPrefixOverlap(prevWords, currentWords)
+	return overlap >= 3
+}
+
+func suffixPrefixOverlap(prevWords, currentWords []string) int {
+	maxOverlap := len(prevWords)
+	if len(currentWords) < maxOverlap {
+		maxOverlap = len(currentWords)
+	}
+	for overlap := maxOverlap; overlap > 0; overlap-- {
+		if sameWords(prevWords[len(prevWords)-overlap:], currentWords[:overlap]) {
+			return overlap
+		}
+	}
+	return 0
+}
+
+func sameWords(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if comparableWord(a[i]) != comparableWord(b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func comparableWord(word string) string {
+	return strings.TrimFunc(strings.ToLower(word), func(r rune) bool {
+		return unicode.IsPunct(r) || unicode.IsSymbol(r)
+	})
 }
