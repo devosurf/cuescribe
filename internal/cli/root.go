@@ -389,7 +389,12 @@ func upgradeDependencies(ctx context.Context, cmd *cobra.Command, names []string
 func isBrewPackageInstalled(ctx context.Context, pkg string) (bool, error) {
 	_, err := runner.ExecRunner{Verbose: false, Stderr: io.Discard}.Run(ctx, "brew", "list", "--versions", pkg)
 	if err != nil {
-		if strings.Contains(err.Error(), "is not installed") || strings.Contains(err.Error(), "No such keg") {
+		details := strings.ToLower(err.Error())
+		if strings.Contains(details, "is not installed") ||
+			strings.Contains(details, "no such keg") ||
+			strings.Contains(details, "not installed") ||
+			strings.Contains(details, "no such formula") ||
+			strings.Contains(details, "no available formula") {
 			return false, nil
 		}
 		return false, err
@@ -398,9 +403,19 @@ func isBrewPackageInstalled(ctx context.Context, pkg string) (bool, error) {
 }
 
 func runBrewCommand(ctx context.Context, cmd *cobra.Command, subcommand string, packages []string) error {
-	args := append([]string{subcommand}, packages...)
-	_, err := runner.ExecRunner{Verbose: true, Stderr: cmd.ErrOrStderr()}.Run(ctx, "brew", args...)
+	_, err := runBrewCommandResult(ctx, cmd, subcommand, packages)
 	return err
+}
+
+func runBrewCommandResult(ctx context.Context, cmd *cobra.Command, subcommand string, packages []string) (runner.Result, error) {
+	result, err := runner.ExecRunner{Verbose: true, Stderr: cmd.ErrOrStderr(), Log: cmd.ErrOrStderr()}.Run(ctx, "brew", append([]string{subcommand}, packages...)...)
+	if err == nil {
+		return result, nil
+	}
+	if len(result.Stdout) == 0 && len(result.Stderr) == 0 {
+		return result, fmt.Errorf("brew %s %s failed: %w", subcommand, strings.Join(packages, " "), err)
+	}
+	return result, err
 }
 
 func runSetupModel(ctx context.Context, cmd *cobra.Command, modelName string) error {

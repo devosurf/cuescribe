@@ -212,6 +212,43 @@ func TestRunUpgradeDepsInstallsMissingFormula(t *testing.T) {
 	}
 }
 
+func TestRunBrewCommandIncludesCommandOnSilentFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell executables use /bin/sh")
+	}
+	binDir := t.TempDir()
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nexit 1\n")
+	t.Setenv("PATH", binDir)
+
+	cmd := NewRootCommand()
+	var errOut bytes.Buffer
+	cmd.SetErr(&errOut)
+	err := runBrewCommand(context.Background(), cmd, "upgrade", []string{"whisper-cpp"})
+	if err == nil {
+		t.Fatal("runBrewCommand() error = nil, want failure")
+	}
+	if !strings.Contains(err.Error(), "brew upgrade whisper-cpp") {
+		t.Fatalf("runBrewCommand() error = %v", err)
+	}
+}
+
+func TestIsBrewPackageInstalledTreatsBrewUnavailableFormulaAsMissing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell executables use /bin/sh")
+	}
+	binDir := t.TempDir()
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nif [ \"$1\" = \"list\" ] && [ \"$2\" = \"--versions\" ]; then\n  >&2 echo 'Error: No such formula with the name \"whisper-cpp\"'\n  exit 1\nfi\nexit 0\n")
+	t.Setenv("PATH", binDir)
+
+	ok, err := isBrewPackageInstalled(context.Background(), "whisper-cpp")
+	if err != nil {
+		t.Fatalf("isBrewPackageInstalled() error = %v", err)
+	}
+	if ok {
+		t.Fatalf("isBrewPackageInstalled() = true, want false")
+	}
+}
+
 func TestEnsureDependenciesSkipsWhenAllPresentAndCurrent(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake shell executables use /bin/sh")

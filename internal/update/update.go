@@ -9,10 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/devosurf/cuescribe/internal/model"
 	"github.com/devosurf/cuescribe/internal/progress"
+	"github.com/devosurf/cuescribe/internal/version"
 )
 
 type Manifest struct {
@@ -22,14 +24,19 @@ type Manifest struct {
 	BinarySHA256 string `json:"binary_sha256"`
 }
 
-func SelfUpdate(ctx context.Context, version string, out io.Writer) error {
+func SelfUpdate(ctx context.Context, target string, out io.Writer) error {
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
 		return fmt.Errorf("Error: unsupported platform %s/%s.\nFix: Cuescribe v1 supports macOS Apple Silicon only", runtime.GOOS, runtime.GOARCH)
 	}
 	progress.Step(out, "Checking release manifest")
-	manifest, err := FetchManifest(ctx, version)
+	manifest, err := FetchManifest(ctx, target)
 	if err != nil {
 		return err
+	}
+	targetVersion := normalizeVersion(manifest.Version)
+	if targetVersion == normalizeVersion(version.Current().Version) {
+		fmt.Fprintf(out, "cuescribe %s is already up to date\n", version.Current().Version)
+		return nil
 	}
 	if manifest.BinaryURL == "" || manifest.BinarySHA256 == "" {
 		return fmt.Errorf("manifest is missing binary_url or binary_sha256")
@@ -69,6 +76,10 @@ func SelfUpdate(ctx context.Context, version string, out io.Writer) error {
 	_ = os.Remove(backup)
 	fmt.Fprintf(out, "updated %s to %s\n", exe, manifest.Version)
 	return nil
+}
+
+func normalizeVersion(v string) string {
+	return strings.TrimPrefix(strings.TrimSpace(v), "v")
 }
 
 func FetchManifest(ctx context.Context, version string) (Manifest, error) {
