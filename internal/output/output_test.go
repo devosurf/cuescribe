@@ -59,14 +59,34 @@ func TestRenderJSONKeepsSegmentTiming(t *testing.T) {
 	}
 }
 
-func TestWritePreventsCollisionWithoutForce(t *testing.T) {
+func TestWriteUsesTimestampOnMarkdownCollision(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "out.md")
 	if err := os.WriteFile(path, []byte("existing"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Write(transcript.Document{Title: "Video"}, Options{Format: FormatMarkdown, OutputPath: path}, &bytes.Buffer{})
+	out, err := Write(transcript.Document{Title: "Video"}, Options{Format: FormatMarkdown, OutputPath: path}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if out == path {
+		t.Fatalf("expected timestamped path, got %q", out)
+	}
+	if filepath.Dir(out) != filepath.Dir(path) {
+		t.Fatalf("timestamped path moved directories: got %q", out)
+	}
+	if !strings.Contains(filepath.Base(out), "out_") {
+		t.Fatalf("expected timestamp in filename: %q", filepath.Base(out))
+	}
+}
+
+func TestWriteCollisionWithoutForceJSONFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.json")
+	if err := os.WriteFile(path, []byte("existing"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Write(transcript.Document{Title: "Video"}, Options{Format: FormatJSON, OutputPath: path}, &bytes.Buffer{})
 	if err == nil {
-		t.Fatal("Write() error = nil, want collision error")
+		t.Fatalf("Write() error = nil, want collision error")
 	}
 	if !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("error = %v, want --force guidance", err)
@@ -89,7 +109,7 @@ func TestWriteDefaultsToTitleFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
-	if written != "Upper Management Meeting.md" {
+	if written != "Upper_Management_Meeting.md" {
 		t.Fatalf("written = %q", written)
 	}
 	if _, err := os.Stat(filepath.Join(dir, written)); err != nil {
@@ -118,7 +138,17 @@ func TestWriteUsesSanitizedTitleForDirectoryOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
-	if filepath.Base(written) != "Bad_Name_.md" {
+	if filepath.Base(written) != "Bad_Name.md" {
 		t.Fatalf("written = %s", written)
+	}
+}
+
+func TestSanitizeFilenameSpacesAndSymbols(t *testing.T) {
+	path, err := resolvePath("", transcript.Document{Title: "  My  Cool Video: The  Final *Cut* "}, ".md")
+	if err != nil {
+		t.Fatalf("resolvePath() error = %v", err)
+	}
+	if path != "My_Cool_Video__The_Final__Cut.md" {
+		t.Fatalf("resolvePath() = %q, want underscores", path)
 	}
 }

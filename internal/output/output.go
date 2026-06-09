@@ -50,13 +50,7 @@ func Write(doc transcript.Document, opts Options, stdout io.Writer) (string, err
 			return "", err
 		}
 	}
-	flag := os.O_WRONLY | os.O_CREATE
-	if opts.Force {
-		flag |= os.O_TRUNC
-	} else {
-		flag |= os.O_EXCL
-	}
-	f, err := os.OpenFile(path, flag, 0o644)
+	f, path, err := openOutputFile(path, ext, opts.Force)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return "", fmt.Errorf("Error: output file already exists: %s\nFix: pass --force or choose a different -o path", path)
@@ -68,6 +62,46 @@ func Write(doc transcript.Document, opts Options, stdout io.Writer) (string, err
 		return "", err
 	}
 	return path, nil
+}
+
+func openOutputFile(path, ext string, force bool) (*os.File, string, error) {
+	flag := os.O_WRONLY | os.O_CREATE
+	if force {
+		flag |= os.O_TRUNC
+		f, err := os.OpenFile(path, flag, 0o644)
+		return f, path, err
+	}
+
+	collisionPath := path
+	for attempts := 0; attempts < 2; attempts++ {
+		f, err := os.OpenFile(collisionPath, flag|os.O_EXCL, 0o644)
+		if err == nil {
+			return f, collisionPath, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, collisionPath, err
+		}
+		if ext != ".md" {
+			return nil, collisionPath, err
+		}
+		if attempts == 0 {
+			collisionPath = timestampedPath(path)
+			continue
+		}
+		return nil, collisionPath, err
+	}
+	return nil, collisionPath, fmt.Errorf("unable to allocate unique output path for %s", path)
+}
+
+func timestampedPath(path string) string {
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(filepath.Base(path), ext)
+	dir := filepath.Dir(path)
+	stamped := fmt.Sprintf("%s_%s%s", base, time.Now().UTC().Format("20060102T150405"), ext)
+	if dir == "." {
+		return stamped
+	}
+	return filepath.Join(dir, stamped)
 }
 
 func Render(doc transcript.Document, opts Options) ([]byte, string, error) {
@@ -229,6 +263,7 @@ func resolvePath(outputPath string, doc transcript.Document, ext string) (string
 }
 
 var unsafeFilename = regexp.MustCompile(`[^\w.\- ]+`)
+var whitespace = regexp.MustCompile(`\s+`)
 
 func sanitizeFilename(name string) string {
 	name = strings.TrimSpace(name)
@@ -236,8 +271,9 @@ func sanitizeFilename(name string) string {
 		name = "transcript"
 	}
 	name = unsafeFilename.ReplaceAllString(name, "_")
-	name = strings.Join(strings.Fields(name), " ")
+	name = whitespace.ReplaceAllString(name, "_")
 	name = strings.Trim(name, ". ")
+	name = strings.Trim(name, "_")
 	if name == "" {
 		return "transcript"
 	}
