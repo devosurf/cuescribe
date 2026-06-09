@@ -85,7 +85,7 @@ func TestListFormatsRunsYTDLP(t *testing.T) {
 	if err := os.WriteFile(fakeYTDLP, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PATH", binDir)
 	t.Setenv("HOME", t.TempDir())
 
 	cmd := NewRootCommand()
@@ -138,7 +138,7 @@ func TestRunUpgradeDepsRunsBrewUpgrade(t *testing.T) {
 	}
 	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$BREW_LOG\"\n")
 	logPath := filepath.Join(t.TempDir(), "brew.log")
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PATH", binDir)
 	t.Setenv("BREW_LOG", logPath)
 
 	cmd := NewRootCommand()
@@ -159,6 +159,80 @@ func TestRunUpgradeDepsRunsBrewUpgrade(t *testing.T) {
 			t.Fatalf("brew args = %q, missing %q", got, want)
 		}
 	}
+}
+
+func TestEnsureDependenciesSkipsWhenAllPresentAndCurrent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell executables use /bin/sh")
+	}
+	binDir := t.TempDir()
+	for _, name := range []string{"yt-dlp", "ffmpeg", "whisper-cli"} {
+		writeFakeExecutable(t, filepath.Join(binDir, name), "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo '2026.03.17'\nelse\n  exit 0\nfi\n")
+	}
+	t.Setenv("PATH", binDir)
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetIn(&bytes.Buffer{})
+	if err := ensureDependencies(context.Background(), cmd, "https://www.youtube.com/watch?v=abc", false); err != nil {
+		t.Fatalf("ensureDependencies() error = %v; stdout = %q", err, out.String())
+	}
+}
+
+func TestEnsureDependenciesErrorsWhenMissingDependenciesNonInteractive(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell executables use /bin/sh")
+	}
+	binDir := t.TempDir()
+	// Deliberately omit yt-dlp to force a dependency gap.
+	writeFakeExecutable(t, filepath.Join(binDir, "ffmpeg"), "#!/bin/sh\nexit 0\n")
+	writeFakeExecutable(t, filepath.Join(binDir, "whisper-cli"), "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", binDir)
+	cmd := NewRootCommand()
+	cmd.SetIn(strings.NewReader("y\n"))
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	err := ensureDependencies(context.Background(), cmd, "https://www.youtube.com/watch?v=abc", false)
+	if err == nil {
+		t.Fatal("ensureDependencies() expected non-interactive missing dependency error, got nil")
+	}
+	if !strings.Contains(err.Error(), "run cuescribe upgrade") {
+		t.Fatalf("ensureDependencies() error = %q", err)
+	}
+}
+
+func TestEnsureDependenciesFailsNonInteractiveWhenYTDLPOld(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell executables use /bin/sh")
+	}
+	binDir := t.TempDir()
+	writeFakeExecutable(t, filepath.Join(binDir, "yt-dlp"), "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo '2026.02.04'\nelse\n  exit 0\nfi\n")
+	writeFakeExecutable(t, filepath.Join(binDir, "ffmpeg"), "#!/bin/sh\nexit 0\n")
+	writeFakeExecutable(t, filepath.Join(binDir, "whisper-cli"), "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", binDir)
+	cmd := NewRootCommand()
+	cmd.SetIn(&bytes.Buffer{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	err := ensureDependencies(context.Background(), cmd, "https://www.youtube.com/watch?v=abc", false)
+	if err == nil {
+		t.Fatalf("ensureDependencies() expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "missing or out of date") || !strings.Contains(err.Error(), "run cuescribe upgrade") {
+		t.Fatalf("ensureDependencies() error = %q", err)
+	}
+}
+
+func TestRequiredDependenciesForInput(t *testing.T) {
+	got := requiredDependenciesForInput("https://youtu.be/example", false)
+	assertStrings(t, got, []string{"yt-dlp", "ffmpeg", "whisper-cli"})
+	got = requiredDependenciesForInput("/path/to/file.mp4", false)
+	assertStrings(t, got, []string{"ffmpeg", "whisper-cli"})
+	got = requiredDependenciesForInput("https://youtu.be/example", true)
+	assertStrings(t, got, []string{"yt-dlp"})
 }
 
 func TestRunSetupCookiesRequireNonInteractiveNeedsBrowser(t *testing.T) {

@@ -58,6 +58,8 @@ type SubtitleSelection struct {
 
 const minimumYTDLPVersion = "2026.03.17"
 
+const MinimumYTDLPVersion = minimumYTDLPVersion
+
 func FetchMetadata(ctx context.Context, r runner.CommandRunner, input string, cookies config.CookieConfig) (Metadata, error) {
 	args := []string{"--ignore-config", "--dump-json", "--skip-download", "--no-playlist", "--no-warnings"}
 	args = append(args, cookies.YTDLPCookieArgs()...)
@@ -105,7 +107,7 @@ func DownloadMedia(ctx context.Context, r runner.CommandRunner, input, dir strin
 	result, err := r.Run(ctx, "yt-dlp", args...)
 	if err != nil {
 		if isRequestedFormatUnavailable(err) {
-			if current, ok := ytDLPVersion(ctx, r); ok && isYTDLPVersionOlder(current, minimumYTDLPVersion) {
+			if current, ok := CurrentYTDLPVersion(ctx, r); ok && IsYTDLPVersionOlder(current, MinimumYTDLPVersion) {
 				return "", fmt.Errorf("Error: YouTube download failed because this yt-dlp version is too old for this video or extractor path.\nFix: upgrade yt-dlp from %s to at least %s (`brew upgrade yt-dlp`), then run cuescribe --list-formats %s to confirm formats.\n\n%s", current, minimumYTDLPVersion, strconv.Quote(input), err)
 			}
 			return "", fmt.Errorf("Error: yt-dlp could not download a compatible audio format.\nFix: upgrade yt-dlp with brew upgrade yt-dlp, run cuescribe --list-formats %s to inspect available formats, and if cuescribe doctor reports YouTube cookie access errors, run cuescribe setup cookies --disable or reconfigure cookies.\n\n%s", strconv.Quote(input), err)
@@ -248,6 +250,14 @@ func isRequestedFormatUnavailable(err error) bool {
 		return false
 	}
 	return strings.Contains(err.Error(), "Requested format is not available")
+}
+
+func CurrentYTDLPVersion(ctx context.Context, r runner.CommandRunner) (string, bool) {
+	return ytDLPVersion(ctx, r)
+}
+
+func IsYTDLPVersionOlder(value, minimum string) bool {
+	return isYTDLPVersionOlder(value, minimum)
 }
 
 func ytDLPVersion(ctx context.Context, r runner.CommandRunner) (string, bool) {

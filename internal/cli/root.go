@@ -72,9 +72,15 @@ func NewRootCommand() *cobra.Command {
 				return cmd.Help()
 			}
 			if opts.listFormats {
+				if err := ensureDependencies(cmd.Context(), cmd, args[0], true); err != nil {
+					return err
+				}
 				return runListFormats(cmd.Context(), cmd, args[0])
 			}
 			if err := validateRootOptions(opts); err != nil {
+				return err
+			}
+			if err := ensureDependencies(cmd.Context(), cmd, args[0], false); err != nil {
 				return err
 			}
 			cfg, paths, err := config.LoadDefault()
@@ -254,19 +260,91 @@ func newSetupCommand() *cobra.Command {
 }
 
 func runSetupDeps(ctx context.Context, cmd *cobra.Command, yes bool) error {
-	required := requiredDependencies()
-	var missing []string
-	for _, name := range required {
+	return installDependencies(ctx, cmd, yes, requiredDependencies())
+}
+
+func requiredDependencies() []string {
+	return []string{"yt-dlp", "ffmpeg", "whisper-cli"}
+}
+
+func runUpgradeDeps(ctx context.Context, cmd *cobra.Command) error {
+	return upgradeDependencies(ctx, cmd, requiredDependencies())
+}
+
+func ensureDependencies(ctx context.Context, cmd *cobra.Command, input string, listFormats bool) error {
+	deps := requiredDependenciesForInput(input, listFormats)
+	missing := []string{}
+	for _, dep := range deps {
+		if !runner.LookPath(dep) {
+			missing = append(missing, dep)
+		}
+	}
+	needsYTDLPUpdate := false
+	currentYTDLPVersion := ""
+	if containsString(deps, "yt-dlp") && runner.LookPath("yt-dlp") {
+		if version, ok := ytdlp.CurrentYTDLPVersion(ctx, runner.ExecRunner{Stderr: cmd.ErrOrStderr()}); ok {
+			currentYTDLPVersion = version
+			needsYTDLPUpdate = ytdlp.IsYTDLPVersionOlder(currentYTDLPVersion, ytdlp.MinimumYTDLPVersion)
+		}
+	}
+	if len(missing) == 0 && !needsYTDLPUpdate {
+		return nil
+	}
+
+	fmt.Fprintln(cmd.OutOrStdout(), "dependency check found issues:")
+	if len(missing) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "  - missing: %s\n", strings.Join(missing, ", "))
+	}
+	if needsYTDLPUpdate {
+		fmt.Fprintf(cmd.OutOrStdout(), "  - yt-dlp upgrade needed: current %s, required %s\n", currentYTDLPVersion, ytdlp.MinimumYTDLPVersion)
+	}
+	if !isInteractiveInput(cmd) {
+		req := strings.Join(deps, ", ")
+		return fmt.Errorf("Error: this environment is missing or out of date for required dependencies: %s\nFix: run cuescribe upgrade", req)
+	}
+	fmt.Fprint(cmd.OutOrStdout(), "upgrade required dependencies now? [Y/n] ")
+	reader := bufio.NewReader(cmd.InOrStdin())
+	answer, _ := reader.ReadString('\n')
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	if answer == "n" || answer == "no" {
+		return fmt.Errorf("Error: dependency upgrade declined.\nFix: rerun with an explicit yes or manually run cuescribe upgrade")
+	}
+	if len(missing) > 0 {
+		if err := upgradeDependencies(ctx, cmd, deps); err != nil {
+			return err
+		}
+		return nil
+	}
+	if needsYTDLPUpdate {
+		if err := upgradeDependencies(ctx, cmd, []string{"yt-dlp"}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requiredDependenciesForInput(input string, listFormats bool) []string {
+	if listFormats {
+		return []string{"yt-dlp"}
+	}
+	if isURL(input) {
+		return requiredDependencies()
+	}
+	return []string{"ffmpeg", "whisper-cli"}
+}
+
+func installDependencies(ctx context.Context, cmd *cobra.Command, yes bool, names []string) error {
+	missing := []string{}
+	for _, name := range names {
 		if !runner.LookPath(name) {
 			missing = append(missing, name)
 		}
 	}
 	if len(missing) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "dependencies ok")
 		return nil
 	}
 	if !runner.LookPath("brew") {
-		return fmt.Errorf("Error: Homebrew is missing.\nFix: install Homebrew, then run brew install yt-dlp ffmpeg whisper-cpp")
+		return fmt.Errorf("Error: Homebrew is missing.\nFix: install Homebrew, then run brew install %s", strings.Join(brewPackages(missing), " "))
 	}
 	pkgs := brewPackages(missing)
 	if !yes {
@@ -277,18 +355,14 @@ func runSetupDeps(ctx context.Context, cmd *cobra.Command, yes bool) error {
 	return err
 }
 
-func requiredDependencies() []string {
-	return []string{"yt-dlp", "ffmpeg", "whisper-cli"}
-}
-
-func runUpgradeDeps(ctx context.Context, cmd *cobra.Command) error {
-	if err := runSetupDeps(ctx, cmd, true); err != nil {
+func upgradeDependencies(ctx context.Context, cmd *cobra.Command, names []string) error {
+	if err := installDependencies(ctx, cmd, true, names); err != nil {
 		return err
 	}
 	if !runner.LookPath("brew") {
-		return fmt.Errorf("Error: Homebrew is missing.\nFix: install Homebrew, then run brew upgrade yt-dlp ffmpeg whisper-cpp")
+		return fmt.Errorf("Error: Homebrew is missing.\nFix: install Homebrew, then run brew upgrade %s", strings.Join(brewPackages(names), " "))
 	}
-	args := append([]string{"upgrade"}, brewPackages(requiredDependencies())...)
+	args := append([]string{"upgrade"}, brewPackages(names)...)
 	progress.Step(cmd.OutOrStdout(), "Upgrading dependencies")
 	_, err := runner.ExecRunner{Verbose: true, Stderr: cmd.ErrOrStderr()}.Run(ctx, "brew", args...)
 	return err
@@ -1097,6 +1171,10 @@ func isChromeProfileID(id string) bool {
 func isTerminal(file *os.File) bool {
 	info, err := file.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+func isURL(value string) bool {
+	return strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://")
 }
 
 func isInteractiveInput(cmd *cobra.Command) bool {
