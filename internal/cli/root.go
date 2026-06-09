@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 	"github.com/devosurf/cuescribe/internal/runner"
 	appupdate "github.com/devosurf/cuescribe/internal/update"
 	"github.com/devosurf/cuescribe/internal/version"
+	"github.com/devosurf/cuescribe/internal/ytdlp"
 	"github.com/spf13/cobra"
 )
 
@@ -38,6 +40,8 @@ type rootOptions struct {
 	mkdir          bool
 	force          bool
 	verbose        bool
+	debug          bool
+	listFormats    bool
 }
 
 func Execute() {
@@ -62,7 +66,13 @@ func NewRootCommand() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
+				if opts.listFormats {
+					return fmt.Errorf("Error: --list-formats requires INPUT.\nFix: run cuescribe --list-formats URL")
+				}
 				return cmd.Help()
+			}
+			if opts.listFormats {
+				return runListFormats(cmd.Context(), cmd, args[0])
 			}
 			if err := validateRootOptions(opts); err != nil {
 				return err
@@ -77,11 +87,11 @@ func NewRootCommand() *cobra.Command {
 			}
 			defer logFile.Close()
 			fmt.Fprintf(logFile, "cuescribe %s\n", version.Version)
-			if opts.verbose {
+			if opts.verbose || opts.debug {
 				fmt.Fprintf(cmd.ErrOrStderr(), "log: %s\n", logPath)
 			}
 			progressOut := cmd.ErrOrStderr()
-			doc, err := pipeline.New(runner.ExecRunner{Verbose: opts.verbose, Stderr: cmd.ErrOrStderr(), Log: logFile, Progress: progressOut}).Run(cmd.Context(), pipeline.Options{
+			doc, err := pipeline.New(runner.ExecRunner{Verbose: opts.verbose || opts.debug, Stderr: cmd.ErrOrStderr(), Log: logWriter(opts, logFile, cmd.ErrOrStderr()), Progress: progressOut}).Run(cmd.Context(), pipeline.Options{
 				Input:     args[0],
 				Source:    opts.source,
 				Subs:      opts.subs,
@@ -123,15 +133,34 @@ func NewRootCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.mkdir, "mkdir", false, "create output directories")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "overwrite an existing output file")
 	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", false, "show raw child process stderr")
+	cmd.PersistentFlags().BoolVar(&opts.debug, "debug", false, "show detailed logs for troubleshooting")
+	cmd.PersistentFlags().BoolVar(&opts.debug, "cookie-debug", false, "deprecated: use --debug")
+	cmd.Flags().BoolVar(&opts.listFormats, "list-formats", false, "list yt-dlp formats for the input and exit")
 
 	cmd.AddCommand(newSetupCommand())
 	cmd.AddCommand(newConfigCommand())
 	cmd.AddCommand(newDoctorCommand())
 	cmd.AddCommand(newVersionCommand())
-	cmd.AddCommand(newSelfUpdateCommand())
+	cmd.AddCommand(newUpgradeCommand())
 	cmd.AddCommand(newUninstallCommand())
 	cmd.AddCommand(newCompletionCommand(cmd))
 	return cmd
+}
+
+func runListFormats(ctx context.Context, cmd *cobra.Command, input string) error {
+	cfg, _, err := config.LoadDefault()
+	if err != nil {
+		return err
+	}
+	formats, err := ytdlp.ListFormats(ctx, runner.ExecRunner{Verbose: true, Stderr: cmd.ErrOrStderr()}, input, ytdlp.CookiesForInput(input, cfg.Cookies))
+	if err != nil {
+		return err
+	}
+	fmt.Fprint(cmd.OutOrStdout(), formats)
+	if formats != "" && !strings.HasSuffix(formats, "\n") {
+		fmt.Fprintln(cmd.OutOrStdout())
+	}
+	return nil
 }
 
 func validateRootOptions(opts rootOptions) error {
@@ -159,6 +188,9 @@ func oneOf(name, value string, allowed ...string) error {
 func newSetupCommand() *cobra.Command {
 	var yes bool
 	var modelName string
+	var cookiesBrowser string
+	var cookiesProfile string
+	var requireCookies bool
 	cmd := &cobra.Command{
 		Use:   "setup",
 		Short: "Prepare dependencies, model, config, and cookies",
@@ -169,7 +201,12 @@ func newSetupCommand() *cobra.Command {
 			if err := runSetupModel(cmd.Context(), cmd, modelName); err != nil {
 				return err
 			}
-			if err := runSetupCookies(cmd, "", "", false); err != nil {
+			if err := runSetupCookies(cmd.Context(), cmd, cookieSetupOptions{
+				Browser: cookiesBrowser,
+				Profile: cookiesProfile,
+				Require: requireCookies,
+				Prompt:  !yes,
+			}); err != nil {
 				return err
 			}
 			return saveInstallState(cmd)
@@ -177,6 +214,9 @@ func newSetupCommand() *cobra.Command {
 	}
 	cmd.PersistentFlags().BoolVar(&yes, "yes", false, "install missing Homebrew dependencies without prompting")
 	cmd.PersistentFlags().StringVar(&modelName, "model", "small", "model to download")
+	cmd.PersistentFlags().BoolVar(&requireCookies, "require-cookies", false, "fail setup unless YouTube browser cookies are configured and usable")
+	cmd.PersistentFlags().StringVar(&cookiesBrowser, "cookies-browser", "", "browser name for YouTube cookies, such as safari, chrome, or firefox")
+	cmd.PersistentFlags().StringVar(&cookiesProfile, "cookies-profile", "", "browser profile name for YouTube cookies")
 	cmd.AddCommand(&cobra.Command{
 		Use:   "deps",
 		Short: "Check or install Homebrew dependencies",
@@ -197,7 +237,13 @@ func newSetupCommand() *cobra.Command {
 		Use:   "cookies",
 		Short: "Configure YouTube browser cookies by browser/profile",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSetupCookies(cmd, browser, profile, disable)
+			return runSetupCookies(cmd.Context(), cmd, cookieSetupOptions{
+				Browser: browser,
+				Profile: profile,
+				Disable: disable,
+				Require: !disable,
+				Prompt:  true,
+			})
 		},
 	}
 	cookiesCmd.Flags().StringVar(&browser, "browser", "", "browser name for yt-dlp cookies, such as safari, chrome, or firefox")
@@ -208,7 +254,7 @@ func newSetupCommand() *cobra.Command {
 }
 
 func runSetupDeps(ctx context.Context, cmd *cobra.Command, yes bool) error {
-	required := []string{"yt-dlp", "ffmpeg", "whisper-cli"}
+	required := requiredDependencies()
 	var missing []string
 	for _, name := range required {
 		if !runner.LookPath(name) {
@@ -227,6 +273,23 @@ func runSetupDeps(ctx context.Context, cmd *cobra.Command, yes bool) error {
 		return fmt.Errorf("Error: missing dependencies: %s\nFix: run brew install %s", strings.Join(missing, ", "), strings.Join(pkgs, " "))
 	}
 	args := append([]string{"install"}, pkgs...)
+	_, err := runner.ExecRunner{Verbose: true, Stderr: cmd.ErrOrStderr()}.Run(ctx, "brew", args...)
+	return err
+}
+
+func requiredDependencies() []string {
+	return []string{"yt-dlp", "ffmpeg", "whisper-cli"}
+}
+
+func runUpgradeDeps(ctx context.Context, cmd *cobra.Command) error {
+	if err := runSetupDeps(ctx, cmd, true); err != nil {
+		return err
+	}
+	if !runner.LookPath("brew") {
+		return fmt.Errorf("Error: Homebrew is missing.\nFix: install Homebrew, then run brew upgrade yt-dlp ffmpeg whisper-cpp")
+	}
+	args := append([]string{"upgrade"}, brewPackages(requiredDependencies())...)
+	progress.Step(cmd.OutOrStdout(), "Upgrading dependencies")
 	_, err := runner.ExecRunner{Verbose: true, Stderr: cmd.ErrOrStderr()}.Run(ctx, "brew", args...)
 	return err
 }
@@ -257,7 +320,16 @@ func runSetupModel(ctx context.Context, cmd *cobra.Command, modelName string) er
 	return nil
 }
 
-func runSetupCookies(cmd *cobra.Command, browser, profile string, disable bool) error {
+type cookieSetupOptions struct {
+	Browser       string
+	Profile       string
+	Disable       bool
+	Require       bool
+	Prompt        bool
+	AssumeConsent bool
+}
+
+func runSetupCookies(ctx context.Context, cmd *cobra.Command, opts cookieSetupOptions) error {
 	paths, err := config.ResolvePaths()
 	if err != nil {
 		return err
@@ -266,34 +338,48 @@ func runSetupCookies(cmd *cobra.Command, browser, profile string, disable bool) 
 	if err != nil {
 		return err
 	}
-	if disable {
+	if opts.Disable {
 		cfg.Cookies = config.CookieConfig{}
-	} else if browser != "" {
-		browser = normalizeBrowserName(browser)
+	} else if opts.Profile != "" && opts.Browser == "" {
+		return fmt.Errorf("Error: cookie profile requires a browser.\nFix: pass --cookies-browser chrome --cookies-profile %s", strconv.Quote(opts.Profile))
+	} else if opts.Browser != "" {
+		browser := normalizeBrowserName(opts.Browser)
+		profile := opts.Profile
+		if browser == "chrome" && profile == "" && opts.Prompt && isInteractiveInput(cmd) {
+			profile = promptChromeProfile(cmd, bufio.NewReader(cmd.InOrStdin()))
+		}
 		cfg.Cookies.Enabled = true
 		cfg.Cookies.Browser = browser
 		cfg.Cookies.Profile = profile
-	} else if isTerminal(os.Stdin) {
+	} else if opts.AssumeConsent || (opts.Prompt && isInteractiveInput(cmd)) {
 		detected := detectBrowsers()
 		defaultBrowser := detectDefaultBrowser()
 		detected = mergeDetectedDefaultBrowser(detected, defaultBrowser)
 		if len(detected) == 0 {
-			fmt.Fprintln(cmd.OutOrStdout(), "no supported browsers detected; cookies disabled")
+			if opts.Require {
+				return fmt.Errorf("Error: no supported browsers detected for YouTube cookies.\nFix: install Safari, Chrome, Firefox, Brave, or Edge; or rerun without --require-cookies")
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "warn  cookies: no supported browsers detected; cookies disabled")
 			return config.Save(paths.ConfigFile, cfg)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "detected browsers: %s\n", strings.Join(detected, ", "))
 		if containsString(detected, defaultBrowser) {
 			fmt.Fprintf(cmd.OutOrStdout(), "default browser: %s\n", defaultBrowser)
 		}
-		fmt.Fprint(cmd.OutOrStdout(), "enable YouTube browser cookies? [y/N] ")
 		reader := bufio.NewReader(cmd.InOrStdin())
-		answer, _ := reader.ReadString('\n')
-		answer = strings.TrimSpace(strings.ToLower(answer))
-		if answer != "y" && answer != "yes" {
-			fmt.Fprintln(cmd.OutOrStdout(), "cookies disabled")
-			return config.Save(paths.ConfigFile, cfg)
+		if !opts.AssumeConsent {
+			fmt.Fprint(cmd.OutOrStdout(), "enable YouTube browser cookies? [Y/n] ")
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(strings.ToLower(answer))
+			if answer == "n" || answer == "no" {
+				if opts.Require {
+					return fmt.Errorf("Error: YouTube browser cookies are required.\nFix: rerun setup and consent to browser cookie access, or rerun without --require-cookies")
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "warn  cookies: disabled")
+				return config.Save(paths.ConfigFile, cfg)
+			}
 		}
-		browser = preferredBrowser(detected, defaultBrowser)
+		browser := preferredBrowser(detected, defaultBrowser)
 		if len(detected) > 1 {
 			fmt.Fprintf(cmd.OutOrStdout(), "browser [%s]: ", browser)
 			selected, _ := reader.ReadString('\n')
@@ -303,6 +389,7 @@ func runSetupCookies(cmd *cobra.Command, browser, profile string, disable bool) 
 			}
 		}
 		browser = normalizeBrowserName(browser)
+		profile := ""
 		if browser == "chrome" {
 			profile = promptChromeProfile(cmd, reader)
 		} else {
@@ -312,14 +399,46 @@ func runSetupCookies(cmd *cobra.Command, browser, profile string, disable bool) 
 		cfg.Cookies.Browser = browser
 		cfg.Cookies.Profile = profile
 	} else {
-		fmt.Fprintln(cmd.OutOrStdout(), "cookies disabled")
-		fmt.Fprintln(cmd.OutOrStdout(), "enable with: cuescribe setup cookies --browser safari")
+		if opts.Require {
+			return fmt.Errorf("Error: YouTube browser cookies are required in non-interactive setup.\nFix: pass --cookies-browser and, for Chrome, --cookies-profile; or rerun without --require-cookies")
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "warn  cookies: disabled")
+		fmt.Fprintln(cmd.OutOrStdout(), "enable with: cuescribe setup cookies --browser chrome --profile Default")
 		return config.Save(paths.ConfigFile, cfg)
+	}
+	if cfg.Cookies.Enabled {
+		if err := validateYouTubeCookieAccess(ctx, cmd, cfg.Cookies, shouldDebug(cmd)); err != nil {
+			return err
+		}
 	}
 	if err := config.Save(paths.ConfigFile, cfg); err != nil {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "config saved: %s\n", paths.ConfigFile)
+	return nil
+}
+
+func validateYouTubeCookieAccess(ctx context.Context, cmd *cobra.Command, cookies config.CookieConfig, debug bool) error {
+	if !cookies.Enabled {
+		return fmt.Errorf("Error: YouTube browser cookies are disabled.\nFix: run cuescribe setup cookies --browser chrome --profile Default")
+	}
+	if strings.TrimSpace(cookies.Browser) == "" {
+		return fmt.Errorf("Error: browser is required when cookies are enabled.\nFix: run cuescribe setup cookies --browser chrome --profile Default")
+	}
+	if !runner.LookPath("yt-dlp") {
+		return fmt.Errorf("Error: yt-dlp is missing.\nFix: brew install yt-dlp")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	args := []string{"--simulate", "--skip-download", "--no-warnings"}
+	args = append(args, cookies.YTDLPCookieArgs()...)
+	args = append(args, "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+	if debug {
+		fmt.Fprintf(cmd.ErrOrStderr(), "debug: validating YouTube cookie access %q\n", cookies.YTDLPCookieArgs())
+	}
+	if _, err := (runner.ExecRunner{Verbose: debug, Stderr: cmd.ErrOrStderr()}).Run(ctx, "yt-dlp", args...); err != nil {
+		return fmt.Errorf("Error: YouTube cookie access failed.\nFix: grant terminal/browser profile access, close the browser if needed, or rerun cuescribe setup cookies --browser chrome --profile Default.\n\n%w", err)
+	}
 	return nil
 }
 
@@ -422,7 +541,9 @@ func newConfigCommand() *cobra.Command {
 }
 
 func newDoctorCommand() *cobra.Command {
-	return &cobra.Command{
+	var strict bool
+	var fix bool
+	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check platform, dependencies, model, config, and cookies",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -431,12 +552,15 @@ func newDoctorCommand() *cobra.Command {
 				return err
 			}
 			failures := 0
-			check := func(ok bool, level, name, detail string) {
+			printCheck := func(ok bool, level, name, detail string) {
 				if ok {
 					fmt.Fprintf(cmd.OutOrStdout(), "ok    %s\n", name)
 					return
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "%-5s %s: %s\n", level, name, detail)
+			}
+			check := func(ok bool, level, name, detail string) {
+				printCheck(ok, level, name, detail)
 				if level == "error" {
 					failures++
 				}
@@ -458,26 +582,137 @@ func newDoctorCommand() *cobra.Command {
 			} else {
 				check(false, "warn", "install state", "run cuescribe setup")
 			}
-			if cfg.Cookies.Enabled {
-				check(cfg.Cookies.Browser != "", "error", "cookies", "browser is required when cookies are enabled")
-				if cfg.Cookies.Browser != "" && runner.LookPath("yt-dlp") {
-					ctx, cancel := context.WithTimeout(cmd.Context(), 20*time.Second)
-					defer cancel()
-					args := []string{"--simulate", "--skip-download", "--no-warnings"}
-					args = append(args, cfg.Cookies.YTDLPCookieArgs()...)
-					args = append(args, "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-					_, err := runner.ExecRunner{Verbose: false}.Run(ctx, "yt-dlp", args...)
-					check(err == nil, "error", "YouTube cookie access", "check browser/profile access or disable cookies")
-				}
-			} else {
-				check(true, "ok", "cookies", "disabled")
+			cookieFailures, err := runDoctorCookieChecks(cmd.Context(), cmd, cfg, strict, fix, shouldDebug(cmd), printCheck)
+			if err != nil {
+				return err
 			}
+			failures += cookieFailures
 			if failures > 0 {
 				return fmt.Errorf("doctor found %d error(s)", failures)
 			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&strict, "strict", false, "fail when recommended YouTube cookies are disabled or broken")
+	cmd.Flags().BoolVar(&fix, "fix", false, "interactively repair YouTube browser cookie configuration")
+	return cmd
+}
+
+func runDoctorCookieChecks(ctx context.Context, cmd *cobra.Command, cfg config.Config, strict, fix, debug bool, check func(bool, string, string, string)) (int, error) {
+	failures := 0
+	report := func(ok bool, level, name, detail string) {
+		check(ok, level, name, detail)
+		if !ok && level == "error" {
+			failures++
+		}
+	}
+	if !cfg.Cookies.Enabled {
+		if fix {
+			repaired, repairedCfg, err := repairCookieConfig(ctx, cmd)
+			if err != nil {
+				return failures, err
+			}
+			if repaired {
+				cfg.Cookies = repairedCfg.Cookies
+			}
+		}
+		if !cfg.Cookies.Enabled {
+			level := "warn"
+			if strict {
+				level = "error"
+			}
+			report(false, level, "cookies", "disabled; run cuescribe setup cookies --browser chrome --profile Default")
+			return failures, nil
+		}
+	}
+	if cfg.Cookies.Browser == "" {
+		if fix {
+			repaired, repairedCfg, err := repairCookieConfig(ctx, cmd)
+			if err != nil {
+				return failures, err
+			}
+			if repaired {
+				cfg.Cookies = repairedCfg.Cookies
+			}
+		}
+		if cfg.Cookies.Browser == "" {
+			report(false, "error", "cookie config", "browser is required when cookies are enabled")
+			return failures, nil
+		}
+	}
+	if err := validateYouTubeCookieAccess(ctx, cmd, cfg.Cookies, debug); err != nil {
+		if fix {
+			repaired, repairedCfg, repairErr := repairCookieConfig(ctx, cmd)
+			if repairErr != nil {
+				return failures, repairErr
+			}
+			if repaired {
+				cfg.Cookies = repairedCfg.Cookies
+				err = validateYouTubeCookieAccess(ctx, cmd, cfg.Cookies, debug)
+			}
+		}
+		if err != nil {
+			report(false, "error", "YouTube cookie access", "check browser/profile access, or run cuescribe doctor --fix")
+			return failures, nil
+		}
+	}
+	report(true, "ok", "YouTube cookie access", "")
+	return failures, nil
+}
+
+func shouldDebug(cmd *cobra.Command) bool {
+	verbose, err := getBoolFlag(cmd, "verbose")
+	if err == nil && verbose {
+		return true
+	}
+	cookieDebug, err := getBoolFlag(cmd, "cookie-debug")
+	if err == nil && cookieDebug {
+		return true
+	}
+	debug, err := getBoolFlag(cmd, "debug")
+	if err != nil {
+		return false
+	}
+	return debug
+}
+
+func getBoolFlag(cmd *cobra.Command, name string) (bool, error) {
+	if value, err := cmd.Flags().GetBool(name); err == nil {
+		return value, nil
+	}
+	return cmd.InheritedFlags().GetBool(name)
+}
+
+func logWriter(opts rootOptions, logFile *os.File, errOut io.Writer) io.Writer {
+	if opts.debug {
+		return io.MultiWriter(logFile, errOut)
+	}
+	return logFile
+}
+
+func repairCookieConfig(ctx context.Context, cmd *cobra.Command) (bool, config.Config, error) {
+	if !isInteractiveInput(cmd) {
+		return false, config.Config{}, fmt.Errorf("Error: doctor --fix requires an interactive terminal.\nFix: run cuescribe setup cookies --browser chrome --profile Default")
+	}
+	fmt.Fprint(cmd.OutOrStdout(), "configure YouTube browser cookies now? [y/N] ")
+	reader := bufio.NewReader(cmd.InOrStdin())
+	answer, _ := reader.ReadString('\n')
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	if answer != "y" && answer != "yes" {
+		return false, config.Config{}, nil
+	}
+	if err := runSetupCookies(ctx, cmd, cookieSetupOptions{
+		Require:       true,
+		Prompt:        true,
+		AssumeConsent: true,
+	}); err != nil {
+		return false, config.Config{}, err
+	}
+	cfg, _, err := config.LoadDefault()
+	if err != nil {
+		return false, config.Config{}, err
+	}
+	return true, cfg, nil
 }
 
 func newVersionCommand() *cobra.Command {
@@ -515,12 +750,16 @@ func newVersionCommand() *cobra.Command {
 	return cmd
 }
 
-func newSelfUpdateCommand() *cobra.Command {
+func newUpgradeCommand() *cobra.Command {
 	var updateVersion string
 	cmd := &cobra.Command{
-		Use:   "self-update",
-		Short: "Download, verify, and replace the installed binary",
+		Use:     "upgrade",
+		Aliases: []string{"self-update"},
+		Short:   "Upgrade Cuescribe and Homebrew dependencies",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := runUpgradeDeps(cmd.Context(), cmd); err != nil {
+				return err
+			}
 			if err := appupdate.SelfUpdate(cmd.Context(), updateVersion, cmd.OutOrStdout()); err != nil {
 				return err
 			}
@@ -724,7 +963,10 @@ func (p browserProfile) label() string {
 }
 
 func promptChromeProfile(cmd *cobra.Command, reader *bufio.Reader) string {
-	profiles := detectChromeProfiles()
+	return promptChromeProfileFromProfiles(cmd, reader, detectChromeProfiles())
+}
+
+func promptChromeProfileFromProfiles(cmd *cobra.Command, reader *bufio.Reader, profiles []browserProfile) string {
 	if len(profiles) == 0 {
 		return promptOptionalProfile(cmd, reader)
 	}
@@ -855,4 +1097,12 @@ func isChromeProfileID(id string) bool {
 func isTerminal(file *os.File) bool {
 	info, err := file.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+func isInteractiveInput(cmd *cobra.Command) bool {
+	file, ok := cmd.InOrStdin().(*os.File)
+	if !ok {
+		return false
+	}
+	return isTerminal(file)
 }

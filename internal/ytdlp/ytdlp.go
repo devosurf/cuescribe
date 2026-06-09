@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -56,7 +57,7 @@ type SubtitleSelection struct {
 }
 
 func FetchMetadata(ctx context.Context, r runner.CommandRunner, input string, cookies config.CookieConfig) (Metadata, error) {
-	args := []string{"--dump-json", "--skip-download", "--no-playlist", "--no-warnings"}
+	args := []string{"--ignore-config", "--dump-json", "--skip-download", "--no-playlist", "--no-warnings"}
 	args = append(args, cookies.YTDLPCookieArgs()...)
 	args = append(args, input)
 	result, err := r.Run(ctx, "yt-dlp", args...)
@@ -76,9 +77,21 @@ func FetchMetadata(ctx context.Context, r runner.CommandRunner, input string, co
 	return md, nil
 }
 
+func ListFormats(ctx context.Context, r runner.CommandRunner, input string, cookies config.CookieConfig) (string, error) {
+	args := []string{"--ignore-config", "--list-formats", "--no-playlist", "--no-warnings"}
+	args = append(args, cookies.YTDLPCookieArgs()...)
+	args = append(args, input)
+	result, err := r.Run(ctx, "yt-dlp", args...)
+	if err != nil {
+		return "", err
+	}
+	return string(result.Stdout), nil
+}
+
 func DownloadMedia(ctx context.Context, r runner.CommandRunner, input, dir string, cookies config.CookieConfig) (string, error) {
 	outTemplate := filepath.Join(dir, "source.%(ext)s")
 	args := []string{
+		"--ignore-config",
 		"--no-playlist",
 		"--no-warnings",
 		"-f", "bestaudio/best",
@@ -89,6 +102,9 @@ func DownloadMedia(ctx context.Context, r runner.CommandRunner, input, dir strin
 	args = append(args, input)
 	result, err := r.Run(ctx, "yt-dlp", args...)
 	if err != nil {
+		if isRequestedFormatUnavailable(err) {
+			return "", fmt.Errorf("Error: yt-dlp could not download a compatible audio format.\nFix: upgrade yt-dlp with brew upgrade yt-dlp, run cuescribe --list-formats %s to inspect available formats, and if cuescribe doctor reports YouTube cookie access errors, run cuescribe setup cookies --disable or reconfigure cookies.\n\n%s", strconv.Quote(input), err)
+		}
 		return "", err
 	}
 	var lines []string
@@ -102,6 +118,13 @@ func DownloadMedia(ctx context.Context, r runner.CommandRunner, input, dir strin
 		return "", fmt.Errorf("yt-dlp did not report a downloaded file path")
 	}
 	return lines[len(lines)-1], nil
+}
+
+func CookiesForInput(input string, cookies config.CookieConfig) config.CookieConfig {
+	if !isYouTubeURL(input) {
+		cookies.Enabled = false
+	}
+	return cookies
 }
 
 func SelectSubtitle(md Metadata, lang, subs string, translate bool) (SubtitleSelection, bool) {
@@ -213,6 +236,25 @@ func preferredFormat(formats []SubtitleFormat) (SubtitleFormat, bool) {
 		}
 	}
 	return best, bestScore != 99
+}
+
+func isRequestedFormatUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "Requested format is not available")
+}
+
+func isYouTubeURL(input string) bool {
+	u, err := url.Parse(input)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "youtube.com" ||
+		strings.HasSuffix(host, ".youtube.com") ||
+		host == "youtu.be" ||
+		strings.HasSuffix(host, ".youtu.be")
 }
 
 func secondsDuration(v float64) time.Duration {
