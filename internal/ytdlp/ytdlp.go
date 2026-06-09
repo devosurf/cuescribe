@@ -56,6 +56,8 @@ type SubtitleSelection struct {
 	URL  string
 }
 
+const minimumYTDLPVersion = "2026.03.17"
+
 func FetchMetadata(ctx context.Context, r runner.CommandRunner, input string, cookies config.CookieConfig) (Metadata, error) {
 	args := []string{"--ignore-config", "--dump-json", "--skip-download", "--no-playlist", "--no-warnings"}
 	args = append(args, cookies.YTDLPCookieArgs()...)
@@ -103,6 +105,9 @@ func DownloadMedia(ctx context.Context, r runner.CommandRunner, input, dir strin
 	result, err := r.Run(ctx, "yt-dlp", args...)
 	if err != nil {
 		if isRequestedFormatUnavailable(err) {
+			if current, ok := ytDLPVersion(ctx, r); ok && isYTDLPVersionOlder(current, minimumYTDLPVersion) {
+				return "", fmt.Errorf("Error: YouTube download failed because this yt-dlp version is too old for this video or extractor path.\nFix: upgrade yt-dlp from %s to at least %s (`brew upgrade yt-dlp`), then run cuescribe --list-formats %s to confirm formats.\n\n%s", current, minimumYTDLPVersion, strconv.Quote(input), err)
+			}
 			return "", fmt.Errorf("Error: yt-dlp could not download a compatible audio format.\nFix: upgrade yt-dlp with brew upgrade yt-dlp, run cuescribe --list-formats %s to inspect available formats, and if cuescribe doctor reports YouTube cookie access errors, run cuescribe setup cookies --disable or reconfigure cookies.\n\n%s", strconv.Quote(input), err)
 		}
 		return "", err
@@ -243,6 +248,66 @@ func isRequestedFormatUnavailable(err error) bool {
 		return false
 	}
 	return strings.Contains(err.Error(), "Requested format is not available")
+}
+
+func ytDLPVersion(ctx context.Context, r runner.CommandRunner) (string, bool) {
+	result, err := r.Run(ctx, "yt-dlp", "--version")
+	if err != nil {
+		return "", false
+	}
+	version := strings.TrimSpace(string(result.Stdout))
+	if version == "" {
+		return "", false
+	}
+	fields := strings.Fields(version)
+	if len(fields) == 0 {
+		return "", false
+	}
+	return fields[0], true
+}
+
+func isYTDLPVersionOlder(value, minimum string) bool {
+	parsed, ok := parseThreePartVersion(value)
+	if !ok {
+		return false
+	}
+	min, ok := parseThreePartVersion(minimum)
+	if !ok {
+		return false
+	}
+	if parsed.Major != min.Major {
+		return parsed.Major < min.Major
+	}
+	if parsed.Minor != min.Minor {
+		return parsed.Minor < min.Minor
+	}
+	return parsed.Patch < min.Patch
+}
+
+type threePartVersion struct {
+	Major int
+	Minor int
+	Patch int
+}
+
+func parseThreePartVersion(raw string) (threePartVersion, bool) {
+	parts := strings.Split(strings.TrimSpace(raw), ".")
+	if len(parts) < 3 {
+		return threePartVersion{}, false
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return threePartVersion{}, false
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return threePartVersion{}, false
+	}
+	patch, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return threePartVersion{}, false
+	}
+	return threePartVersion{Major: major, Minor: minor, Patch: patch}, true
 }
 
 func isYouTubeURL(input string) bool {

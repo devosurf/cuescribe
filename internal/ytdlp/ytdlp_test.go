@@ -102,6 +102,9 @@ func TestFetchMetadataAddsIgnoreConfig(t *testing.T) {
 
 func TestDownloadMediaExplainsUnavailableFormat(t *testing.T) {
 	fr := runnerFunc(func(ctx context.Context, name string, args ...string) (runner.Result, error) {
+		if name != "yt-dlp" {
+			t.Fatalf("name = %q, want yt-dlp", name)
+		}
 		return runner.Result{}, errors.New("yt-dlp failed: ERROR: Requested format is not available. Use --list-formats for a list of available formats")
 	})
 	_, err := DownloadMedia(context.Background(), fr, "https://youtu.be/id", t.TempDir(), config.CookieConfig{})
@@ -111,6 +114,52 @@ func TestDownloadMediaExplainsUnavailableFormat(t *testing.T) {
 	got := err.Error()
 	if !strings.Contains(got, "cuescribe --list-formats") || !strings.Contains(got, "brew upgrade yt-dlp") {
 		t.Fatalf("error = %q", got)
+	}
+}
+
+func TestDownloadMediaExplainsOldYTDLPVersion(t *testing.T) {
+	call := 0
+	fr := runnerFunc(func(ctx context.Context, name string, args ...string) (runner.Result, error) {
+		if name != "yt-dlp" {
+			t.Fatalf("name = %q, want yt-dlp", name)
+		}
+		call++
+		switch call {
+		case 1:
+			return runner.Result{}, errors.New("yt-dlp failed: ERROR: Requested format is not available. Use --list-formats for a list of available formats")
+		case 2:
+			return runner.Result{Stdout: []byte("2026.02.04\n")}, nil
+		default:
+			t.Fatalf("unexpected yt-dlp call %d", call)
+			return runner.Result{}, nil
+		}
+	})
+	_, err := DownloadMedia(context.Background(), fr, "https://youtu.be/id", t.TempDir(), config.CookieConfig{})
+	if err == nil {
+		t.Fatal("DownloadMedia() error = nil")
+	}
+	got := err.Error()
+	if !strings.Contains(got, "from 2026.02.04") {
+		t.Fatalf("error = %q", got)
+	}
+	if !strings.Contains(got, "at least 2026.03.17") {
+		t.Fatalf("error = %q", got)
+	}
+}
+
+func TestParseThreePartVersion(t *testing.T) {
+	v, ok := parseThreePartVersion("2026.03.17")
+	if !ok {
+		t.Fatal("parseThreePartVersion() = false")
+	}
+	if v != (threePartVersion{2026, 3, 17}) {
+		t.Fatalf("v = %+v", v)
+	}
+	if !isYTDLPVersionOlder("2026.02.01", minimumYTDLPVersion) {
+		t.Fatal("isYTDLPVersionOlder(2026.02.01) = false")
+	}
+	if isYTDLPVersionOlder("2026.03.18", minimumYTDLPVersion) {
+		t.Fatal("isYTDLPVersionOlder(2026.03.18) = true")
 	}
 }
 
