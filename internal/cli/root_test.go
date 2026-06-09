@@ -150,7 +150,7 @@ func TestRunUpgradeDepsRunsBrewUpgrade(t *testing.T) {
 	for _, name := range []string{"yt-dlp", "ffmpeg", "whisper-cli"} {
 		writeFakeExecutable(t, filepath.Join(binDir, name), "#!/bin/sh\nexit 0\n")
 	}
-	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BREW_LOG\"\n")
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nif [ \"$1\" = \"outdated\" ]; then\n  shift\n  if [ \"$1\" = \"--formula\" ]; then\n    shift\n    for pkg in \"$@\"; do\n      echo \"$pkg\"\n    done\n  fi\n  exit 0\nfi\nprintf '%s\\n' \"$@\" >> \"$BREW_LOG\"\n")
 	logPath := filepath.Join(t.TempDir(), "brew.log")
 	t.Setenv("PATH", binDir)
 	t.Setenv("BREW_LOG", logPath)
@@ -186,7 +186,7 @@ func TestRunUpgradeDepsInstallsMissingFormula(t *testing.T) {
 	for _, name := range []string{"yt-dlp", "ffmpeg", "whisper-cli"} {
 		writeFakeExecutable(t, filepath.Join(binDir, name), "#!/bin/sh\nexit 0\n")
 	}
-	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nif [ \"$1\" = \"list\" ] && [ \"$2\" = \"--versions\" ]; then\n  if [ \"$3\" = \"whisper-cpp\" ]; then\n    >&2 echo \"No such keg: whisper-cpp\"\n    exit 1\n  fi\nfi\nprintf '%s\\n' \"$@\" >> \"$BREW_LOG\"\nexit 0\n")
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nif [ \"$1\" = \"list\" ] && [ \"$2\" = \"--versions\" ]; then\n  if [ \"$3\" = \"whisper-cpp\" ]; then\n    >&2 echo \"No such keg: whisper-cpp\"\n    exit 1\n  fi\nfi\nif [ \"$1\" = \"outdated\" ]; then\n  shift\n  if [ \"$1\" = \"--formula\" ]; then\n    shift\n    for pkg in \"$@\"; do\n      echo \"$pkg\"\n    done\n  fi\n  exit 0\nfi\nprintf '%s\\n' \"$@\" >> \"$BREW_LOG\"\nexit 0\n")
 	logPath := filepath.Join(t.TempDir(), "brew.log")
 	t.Setenv("PATH", binDir)
 	t.Setenv("BREW_LOG", logPath)
@@ -229,6 +229,60 @@ func TestRunBrewCommandIncludesCommandOnSilentFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "brew upgrade whisper-cpp") {
 		t.Fatalf("runBrewCommand() error = %v", err)
+	}
+}
+
+func TestRunUpgradeDepsNoOpWhenAllDependenciesCurrent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell executables use /bin/sh")
+	}
+	binDir := t.TempDir()
+	for _, name := range []string{"yt-dlp", "ffmpeg", "whisper-cli"} {
+		writeFakeExecutable(t, filepath.Join(binDir, name), "#!/bin/sh\nexit 0\n")
+	}
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nif [ \"$1\" = \"list\" ] && [ \"$2\" = \"--versions\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"outdated\" ]; then\n  shift\n  if [ \"$1\" = \"--formula\" ]; then\n    shift\n    for pkg in \"$@\"; do\n      :\n    done\n  fi\n  exit 0\nfi\nprintf '%s\\n' \"$@\" >> \"$BREW_LOG\"\nexit 0\n")
+	logPath := filepath.Join(t.TempDir(), "brew.log")
+	t.Setenv("PATH", binDir)
+	t.Setenv("BREW_LOG", logPath)
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	if err := runUpgradeDeps(context.Background(), cmd); err != nil {
+		t.Fatalf("runUpgradeDeps() error = %v; stderr = %q", err, errOut.String())
+	}
+	if !strings.Contains(out.String(), "All dependencies are up to date.") {
+		t.Fatalf("runUpgradeDeps() output = %q", out.String())
+	}
+	data, err := os.ReadFile(logPath)
+	if err == nil && strings.Contains(string(data), "\nupgrade\n") {
+		t.Fatalf("brew args = %q, unexpected upgrade call", string(data))
+	}
+}
+
+func TestIsBrewPackageOutdated(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell executables use /bin/sh")
+	}
+	binDir := t.TempDir()
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nif [ \"$1\" = \"outdated\" ] && [ \"$2\" = \"--formula\" ]; then\n  if [ \"$3\" = \"yt-dlp\" ]; then\n    echo 'yt-dlp 2026.03.17_2 != 2026.03.17_2'\n    exit 0\n  fi\n  if [ \"$3\" = \"ffmpeg\" ]; then\n    exit 0\n  fi\nfi\nexit 0\n")
+	t.Setenv("PATH", binDir)
+
+	ok, err := isBrewPackageOutdated(context.Background(), "yt-dlp")
+	if err != nil {
+		t.Fatalf("isBrewPackageOutdated() error = %v", err)
+	}
+	if !ok {
+		t.Fatalf("isBrewPackageOutdated() = false, want true")
+	}
+	ok, err = isBrewPackageOutdated(context.Background(), "ffmpeg")
+	if err != nil {
+		t.Fatalf("isBrewPackageOutdated() error = %v", err)
+	}
+	if ok {
+		t.Fatalf("isBrewPackageOutdated() = true, want false")
 	}
 }
 

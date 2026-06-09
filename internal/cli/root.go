@@ -368,7 +368,13 @@ func upgradeDependencies(ctx context.Context, cmd *cobra.Command, names []string
 			return err
 		}
 		if installed {
-			upgrade = append(upgrade, pkg)
+			outdated, err := isBrewPackageOutdated(ctx, pkg)
+			if err != nil {
+				return err
+			}
+			if outdated {
+				upgrade = append(upgrade, pkg)
+			}
 		} else {
 			install = append(install, pkg)
 		}
@@ -380,10 +386,23 @@ func upgradeDependencies(ctx context.Context, cmd *cobra.Command, names []string
 		}
 	}
 	if len(upgrade) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "All dependencies are up to date.")
 		return nil
 	}
 	progress.Step(cmd.OutOrStdout(), "Upgrading dependencies")
 	return runBrewCommand(ctx, cmd, "upgrade", upgrade)
+}
+
+func isBrewPackageOutdated(ctx context.Context, pkg string) (bool, error) {
+	result, err := runner.ExecRunner{Verbose: false, Stderr: io.Discard}.Run(ctx, "brew", "outdated", "--formula", pkg)
+	if err != nil {
+		return false, err
+	}
+	out := strings.TrimSpace(string(result.Stdout))
+	if out == "" {
+		return false, nil
+	}
+	return true, nil
 }
 
 func isBrewPackageInstalled(ctx context.Context, pkg string) (bool, error) {
@@ -408,14 +427,31 @@ func runBrewCommand(ctx context.Context, cmd *cobra.Command, subcommand string, 
 }
 
 func runBrewCommandResult(ctx context.Context, cmd *cobra.Command, subcommand string, packages []string) (runner.Result, error) {
-	result, err := runner.ExecRunner{Verbose: true, Stderr: cmd.ErrOrStderr(), Log: cmd.ErrOrStderr()}.Run(ctx, "brew", append([]string{subcommand}, packages...)...)
+	result, err := runner.ExecRunner{Verbose: false, Stderr: io.Discard}.Run(ctx, "brew", append([]string{subcommand}, packages...)...)
 	if err == nil {
+		output := strings.TrimSpace(string(result.Stderr))
+		if output != "" {
+			printFilteredBrewOutput(cmd.ErrOrStderr(), output)
+		}
 		return result, nil
 	}
 	if len(result.Stdout) == 0 && len(result.Stderr) == 0 {
 		return result, fmt.Errorf("brew %s %s failed: %w", subcommand, strings.Join(packages, " "), err)
 	}
 	return result, err
+}
+
+func printFilteredBrewOutput(w io.Writer, output string) {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "Warning:") && strings.Contains(line, "already installed") {
+			continue
+		}
+		fmt.Fprintln(w, line)
+	}
 }
 
 func runSetupModel(ctx context.Context, cmd *cobra.Command, modelName string) error {
