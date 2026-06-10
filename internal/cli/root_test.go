@@ -147,6 +147,7 @@ func TestRunUpgradeDepsRunsBrewUpgrade(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake shell executables use /bin/sh")
 	}
+	t.Setenv("HOME", t.TempDir())
 	binDir := t.TempDir()
 	for _, name := range []string{"yt-dlp", "ffmpeg", "whisper-cli"} {
 		writeFakeExecutable(t, filepath.Join(binDir, name), "#!/bin/sh\nexit 0\n")
@@ -183,6 +184,7 @@ func TestRunUpgradeDepsInstallsMissingFormula(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake shell executables use /bin/sh")
 	}
+	t.Setenv("HOME", t.TempDir())
 	binDir := t.TempDir()
 	for _, name := range []string{"yt-dlp", "ffmpeg", "whisper-cli"} {
 		writeFakeExecutable(t, filepath.Join(binDir, name), "#!/bin/sh\nexit 0\n")
@@ -237,6 +239,7 @@ func TestRunUpgradeDepsNoOpWhenAllDependenciesCurrent(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake shell executables use /bin/sh")
 	}
+	t.Setenv("HOME", t.TempDir())
 	binDir := t.TempDir()
 	for _, name := range []string{"yt-dlp", "ffmpeg", "whisper-cli"} {
 		writeFakeExecutable(t, filepath.Join(binDir, name), "#!/bin/sh\nexit 0\n")
@@ -716,4 +719,74 @@ func TestBrewPackagesMapsLlamaServer(t *testing.T) {
 	got := brewPackages([]string{"llama-server", "whisper-cli", "yt-dlp"})
 	want := []string{"llama.cpp", "whisper-cpp", "yt-dlp"}
 	assertStrings(t, got, want)
+}
+
+func TestRunUpgradeDepsIncludesLlamaCppWhenSummaryConfigured(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell executables use /bin/sh")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".config", "cuescribe")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configBody := "[summary]\nenabled = true\nmodel = \"qwen3-4b\"\npath = \"/tmp/model.gguf\"\n"
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(configBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	for _, name := range []string{"yt-dlp", "ffmpeg", "whisper-cli"} {
+		writeFakeExecutable(t, filepath.Join(binDir, name), "#!/bin/sh\nexit 0\n")
+	}
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BREW_LOG\"\nif [ \"$1\" = \"list\" ]; then\n  shift 2\n  for pkg in \"$@\"; do\n    echo \"$pkg 1.0.0\"\n  done\n  exit 0\nfi\nif [ \"$1\" = \"outdated\" ]; then\n  shift 3\n  for pkg in \"$@\"; do\n    echo \"$pkg\"\n  done\n  exit 0\nfi\nexit 0\n")
+	logPath := filepath.Join(t.TempDir(), "brew.log")
+	t.Setenv("PATH", binDir)
+	t.Setenv("BREW_LOG", logPath)
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	if err := runUpgradeDeps(context.Background(), cmd); err != nil {
+		t.Fatalf("runUpgradeDeps() error = %v; stderr = %q", err, errOut.String())
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "llama.cpp") {
+		t.Fatalf("brew args = %q, expected llama.cpp when summary configured", string(data))
+	}
+}
+
+func TestRunUpgradeDepsSkipsLlamaCppWithoutSummaryConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell executables use /bin/sh")
+	}
+	t.Setenv("HOME", t.TempDir())
+	binDir := t.TempDir()
+	for _, name := range []string{"yt-dlp", "ffmpeg", "whisper-cli"} {
+		writeFakeExecutable(t, filepath.Join(binDir, name), "#!/bin/sh\nexit 0\n")
+	}
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BREW_LOG\"\nif [ \"$1\" = \"list\" ]; then\n  shift 2\n  for pkg in \"$@\"; do\n    echo \"$pkg 1.0.0\"\n  done\n  exit 0\nfi\nexit 0\n")
+	logPath := filepath.Join(t.TempDir(), "brew.log")
+	t.Setenv("PATH", binDir)
+	t.Setenv("BREW_LOG", logPath)
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&bytes.Buffer{})
+	if err := runUpgradeDeps(context.Background(), cmd); err != nil {
+		t.Fatalf("runUpgradeDeps() error = %v", err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "llama.cpp") {
+		t.Fatalf("brew args = %q, llama.cpp should not be managed without summary config", string(data))
+	}
 }

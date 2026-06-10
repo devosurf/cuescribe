@@ -293,7 +293,20 @@ func requiredDependencies() []string {
 }
 
 func runUpgradeDeps(ctx context.Context, cmd *cobra.Command) error {
-	return upgradeDependencies(ctx, cmd, requiredDependencies())
+	deps := requiredDependencies()
+	cfg, _, err := config.LoadDefault()
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warn  could not read config to check optional dependencies: %v\n", err)
+	} else if summaryConfigured(cfg) {
+		deps = append(deps, "llama-server")
+	}
+	return upgradeDependencies(ctx, cmd, deps)
+}
+
+// summaryConfigured reports whether the user has set up local summaries, in
+// which case llama.cpp is treated as a managed dependency.
+func summaryConfigured(cfg config.Config) bool {
+	return cfg.Summary.Enabled || strings.TrimSpace(cfg.Summary.Model) != ""
 }
 
 func ensureDependencies(ctx context.Context, cmd *cobra.Command, input string, listFormats, summarize bool) error {
