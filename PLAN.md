@@ -17,6 +17,7 @@ cuescribe "https://youtube.com/watch?v=..."
 cuescribe ./lecture.mp4 -o lecture.md
 cuescribe URL --source audio
 cuescribe URL --translate
+cuescribe --list-formats URL
 ```
 
 ## V1 Scope
@@ -66,6 +67,14 @@ Translate behavior:
 3. Else download audio and run Whisper translate mode.
 
 Translation means English only in v1.
+
+Troubleshooting:
+
+```sh
+--list-formats
+```
+
+`--list-formats URL` prints yt-dlp's available formats for the input and exits.
 
 ## Output
 
@@ -192,7 +201,7 @@ Default model: multilingual `small`, downloaded during setup, checksum verified,
 
 Downloads and long-running operations should provide concise terminal feedback by default:
 
-- Use human-readable progress bars for release binary, model, and self-update downloads.
+- Use human-readable progress bars for release binary, model, and upgrade downloads.
 - Use cli-spinners-style Unicode status/spinner output for metadata lookup, media download, audio normalization, transcription, subtitle parsing, and output writing.
 - Keep generated Markdown/JSON clean; progress and status messages go to stderr during transcript generation.
 - Avoid raw byte counter lines such as `123/456 bytes`.
@@ -209,7 +218,7 @@ Advanced model names, including quantized models, can be supported through flags
 
 ## Cookies
 
-Interactive setup can enable YouTube browser cookies after explicit consent.
+Interactive setup asks for consent before enabling YouTube browser cookies. Cookie setup validates YouTube cookie access before saving an enabled cookie config.
 
 Behavior:
 
@@ -221,6 +230,8 @@ Behavior:
 - Automatically attach configured browser cookies to every YouTube call.
 - Do not attach cookies to non-YouTube URLs by default.
 - Non-interactive setup leaves cookies disabled unless a browser/profile is explicitly provided.
+- `--require-cookies` makes setup and doctor strict: cookies must be enabled and validated.
+- `doctor --fix` can repair cookie configuration interactively after consent.
 
 `yt-dlp` cookie syntax supports:
 
@@ -256,6 +267,9 @@ Installer flags:
 ```sh
 --no-setup
 --yes
+--require-cookies
+--cookies-browser BROWSER
+--cookies-profile PROFILE
 --install-dir DIR
 --version VERSION
 ```
@@ -264,10 +278,12 @@ Installer flags:
 
 ```sh
 cuescribe doctor
+cuescribe doctor --strict
+cuescribe doctor --fix
 cuescribe version
 cuescribe version --json
 cuescribe version --check
-cuescribe self-update
+cuescribe upgrade
 cuescribe uninstall
 cuescribe completion zsh|bash|fish
 ```
@@ -279,7 +295,7 @@ cuescribe completion zsh|bash|fish
 - `ffprobe` availability as a warning-level check.
 - Model presence and checksum.
 - Config and install state.
-- YouTube cookie access when cookies are enabled.
+- YouTube cookie status, with access validation when cookies are enabled.
 
 `doctor` does not check for newer Cuescribe releases.
 

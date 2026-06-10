@@ -29,6 +29,9 @@ Installer flags:
 ```sh
 --no-setup
 --yes
+--require-cookies
+--cookies-browser BROWSER
+--cookies-profile PROFILE
 --install-dir DIR
 --version VERSION
 ```
@@ -63,9 +66,11 @@ Common flags:
 -o, --output FILE_OR_DIR
 --mkdir
 --force
+--list-formats
 ```
 
 When `-o` is omitted, Cuescribe writes a title-based file in the current directory, for example `Video Title.md`. Use `-o -` to print to stdout.
+Use `--list-formats URL` to print yt-dlp's available formats for troubleshooting download errors.
 
 ## Setup And Admin
 
@@ -76,13 +81,15 @@ cuescribe setup model
 cuescribe setup cookies --browser safari
 cuescribe setup cookies --browser chrome --profile "Profile 1"
 cuescribe doctor
+cuescribe doctor --strict
+cuescribe doctor --fix
 cuescribe version --json
-cuescribe self-update
+cuescribe upgrade
 cuescribe uninstall --yes
 ```
 
 Config lives at `~/.config/cuescribe/config.toml`, install state at `~/.local/state/cuescribe/install.toml`, models under `~/.local/share/cuescribe/`, and logs/cache under `~/.cache/cuescribe/`.
 
-Interactive setup detects installed browsers, prefers the macOS default browser when supported, and lists Chrome profiles when more than one is available.
+Interactive setup asks for consent before enabling YouTube browser cookies, validates cookie access, prefers the macOS default browser when supported, and lists Chrome profiles when more than one is available. Non-interactive setup leaves cookies disabled unless `--cookies-browser` is passed; use `--require-cookies` to fail setup when cookie access cannot be validated.
 
 Downloads show human-readable progress bars, and transcript runs print concise status for metadata, download, normalization, transcription, and output steps.

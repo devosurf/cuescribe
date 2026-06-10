@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/devosurf/cuescribe/internal/download"
 	"github.com/devosurf/cuescribe/internal/model"
 	"github.com/devosurf/cuescribe/internal/progress"
 	"github.com/devosurf/cuescribe/internal/version"
@@ -22,6 +25,21 @@ type Manifest struct {
 	Platform     string `json:"platform"`
 	BinaryURL    string `json:"binary_url"`
 	BinarySHA256 string `json:"binary_sha256"`
+}
+
+// versionPattern matches release tags such as v0.1.15 or 0.2.0-rc.1. It
+// rejects anything that could alter the manifest URL path (slashes, "..",
+// query separators).
+var versionPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+([-+.][A-Za-z0-9.-]+)?$`)
+
+// allowedBinaryHosts are the only hosts a manifest's binary_url may point
+// to. The SHA256 in the manifest comes from the same source as the URL, so
+// pinning the host is what keeps a tampered manifest from redirecting the
+// download to arbitrary infrastructure.
+var allowedBinaryHosts = map[string]bool{
+	"github.com":                           true,
+	"objects.githubusercontent.com":        true,
+	"release-assets.githubusercontent.com": true,
 }
 
 func SelfUpdate(ctx context.Context, target string, out io.Writer) error {
@@ -41,6 +59,9 @@ func SelfUpdate(ctx context.Context, target string, out io.Writer) error {
 	if manifest.BinaryURL == "" || manifest.BinarySHA256 == "" {
 		return fmt.Errorf("manifest is missing binary_url or binary_sha256")
 	}
+	if err := validateBinaryURL(manifest.BinaryURL); err != nil {
+		return err
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -48,12 +69,12 @@ func SelfUpdate(ctx context.Context, target string, out io.Writer) error {
 	if filepath.Base(exe) != "cuescribe" {
 		return fmt.Errorf("Error: current executable is not an installed cuescribe binary: %s\nFix: install with scripts/install.sh or replace the binary manually", exe)
 	}
-	tmp, err := os.MkdirTemp("", "cuescribe-update-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmp)
-	binaryPath := filepath.Join(tmp, "cuescribe")
+	// Stage the new binary next to the installed one so both renames below
+	// are atomic same-filesystem operations; a temp dir could sit on another
+	// volume, where os.Rename fails with EXDEV.
+	binaryPath := exe + ".new"
+	_ = os.Remove(binaryPath)
+	defer os.Remove(binaryPath)
 	if err := downloadFile(ctx, manifest.BinaryURL, binaryPath, out); err != nil {
 		return err
 	}
@@ -78,11 +99,26 @@ func SelfUpdate(ctx context.Context, target string, out io.Writer) error {
 	return nil
 }
 
+func validateBinaryURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("manifest binary_url is not a valid URL: %w", err)
+	}
+	if u.Scheme != "https" || !allowedBinaryHosts[u.Hostname()] {
+		return fmt.Errorf("manifest binary_url must be an https GitHub URL, got %q", raw)
+	}
+	return nil
+}
+
 func normalizeVersion(v string) string {
 	return strings.TrimPrefix(strings.TrimSpace(v), "v")
 }
 
 func FetchManifest(ctx context.Context, version string) (Manifest, error) {
+	version = strings.TrimSpace(version)
+	if version != "" && version != "latest" && !versionPattern.MatchString(version) {
+		return Manifest{}, fmt.Errorf("Error: invalid version %q.\nFix: pass a release tag such as v0.1.15, or omit --version for the latest release", version)
+	}
 	url := manifestURL(version)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -112,14 +148,18 @@ func manifestURL(version string) string {
 }
 
 func downloadFile(ctx context.Context, url, path string, out io.Writer) error {
+	ctx, guard := download.NewStallGuard(ctx, download.DefaultStallTimeout)
+	defer guard.Stop()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	client := &http.Client{Timeout: 0}
+	// No client timeout: the binary download may legitimately take a long
+	// time; the stall guard aborts it if data stops flowing.
+	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return guard.Wrap(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -129,40 +169,15 @@ func downloadFile(ctx context.Context, url, path string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	bar := progress.NewBar(out, "Downloading update", resp.ContentLength)
-	bar.Start(0)
-	written, err := copyWithProgress(f, resp.Body, bar)
-	if err != nil {
-		return err
+	written, copyErr := download.Copy(f, guard.Reader(resp.Body), bar, 0)
+	closeErr := f.Close()
+	if copyErr != nil {
+		return guard.Wrap(copyErr)
+	}
+	if closeErr != nil {
+		return closeErr
 	}
 	bar.Finish(fmt.Sprintf("downloaded %s", progress.HumanBytes(written)))
 	return nil
-}
-
-func copyWithProgress(dst io.Writer, src io.Reader, bar *progress.Bar) (int64, error) {
-	buf := make([]byte, 1024*1024)
-	var written int64
-	for {
-		nr, er := src.Read(buf)
-		if nr > 0 {
-			nw, ew := dst.Write(buf[:nr])
-			if ew != nil {
-				return written, ew
-			}
-			if nr != nw {
-				return written, io.ErrShortWrite
-			}
-			written += int64(nw)
-			if bar != nil {
-				bar.Set(written)
-			}
-		}
-		if er == io.EOF {
-			return written, nil
-		}
-		if er != nil {
-			return written, er
-		}
-	}
 }

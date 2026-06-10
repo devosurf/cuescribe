@@ -13,6 +13,7 @@ import (
 	"github.com/devosurf/cuescribe/internal/config"
 	"github.com/devosurf/cuescribe/internal/runner"
 	"github.com/devosurf/cuescribe/internal/transcript"
+	"github.com/devosurf/cuescribe/internal/ytdlp"
 )
 
 type fakeRunner func(ctx context.Context, name string, args ...string) (runner.Result, error)
@@ -146,10 +147,10 @@ func argAfter(args []string, value string) string {
 
 func TestYouTubeCookiesOnlyAttachForYouTube(t *testing.T) {
 	cookies := config.CookieConfig{Enabled: true, Browser: "safari"}
-	if len(youtubeCookies("https://vimeo.com/1", cookies).YTDLPCookieArgs()) != 0 {
+	if len(ytdlp.CookiesForInput("https://vimeo.com/1", cookies).YTDLPCookieArgs()) != 0 {
 		t.Fatal("non-YouTube URL kept cookie args")
 	}
-	if got := strings.Join(youtubeCookies("https://youtube.com/watch?v=1", cookies).YTDLPCookieArgs(), " "); !strings.Contains(got, "safari") {
+	if got := strings.Join(ytdlp.CookiesForInput("https://youtube.com/watch?v=1", cookies).YTDLPCookieArgs(), " "); !strings.Contains(got, "safari") {
 		t.Fatalf("YouTube cookie args = %q", got)
 	}
 }

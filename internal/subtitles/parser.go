@@ -212,13 +212,14 @@ func collapseRollingCaptions(segments []transcript.Segment) []transcript.Segment
 			emittedTail = nil
 			lastSpeaker = segment.Speaker
 		}
-		overlap := suffixPrefixOverlap(emittedTail, words)
+		comparable := comparableWords(words)
+		overlap := suffixPrefixOverlap(emittedTail, comparable)
 		if overlap == len(words) {
 			continue
 		}
 		segment.Text = strings.Join(words[overlap:], " ")
 		out = append(out, segment)
-		emittedTail = append(emittedTail, words[overlap:]...)
+		emittedTail = append(emittedTail, comparable[overlap:]...)
 		if len(emittedTail) > 80 {
 			emittedTail = emittedTail[len(emittedTail)-80:]
 		}
@@ -232,16 +233,16 @@ func looksLikeRollingCaptions(segments []transcript.Segment) bool {
 	}
 	overlappingPairs := 0
 	comparablePairs := 0
+	words := make([][]string, len(segments))
+	for i, segment := range segments {
+		words[i] = comparableWords(strings.Fields(segment.Text))
+	}
 	for i := 1; i < len(segments); i++ {
-		prev := segments[i-1]
-		current := segments[i]
-		if prev.Speaker != current.Speaker {
+		if segments[i-1].Speaker != segments[i].Speaker {
 			continue
 		}
 		comparablePairs++
-		prevWords := strings.Fields(prev.Text)
-		currentWords := strings.Fields(current.Text)
-		if rollingOverlap(prevWords, currentWords) {
+		if rollingOverlap(words[i-1], words[i]) {
 			overlappingPairs++
 		}
 	}
@@ -266,16 +267,27 @@ func suffixPrefixOverlap(prevWords, currentWords []string) int {
 	return 0
 }
 
+// sameWords compares slices already normalized by comparableWords.
 func sameWords(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if comparableWord(a[i]) != comparableWord(b[i]) {
+		if a[i] != b[i] {
 			return false
 		}
 	}
 	return true
+}
+
+// comparableWords normalizes each word once so overlap probes compare plain
+// strings instead of re-normalizing the same words O(n²) times.
+func comparableWords(words []string) []string {
+	out := make([]string, len(words))
+	for i, word := range words {
+		out[i] = comparableWord(word)
+	}
+	return out
 }
 
 func comparableWord(word string) string {

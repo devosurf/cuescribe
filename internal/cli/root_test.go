@@ -150,7 +150,7 @@ func TestRunUpgradeDepsRunsBrewUpgrade(t *testing.T) {
 	for _, name := range []string{"yt-dlp", "ffmpeg", "whisper-cli"} {
 		writeFakeExecutable(t, filepath.Join(binDir, name), "#!/bin/sh\nexit 0\n")
 	}
-	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nif [ \"$1\" = \"outdated\" ]; then\n  shift\n  if [ \"$1\" = \"--formula\" ]; then\n    shift\n    for pkg in \"$@\"; do\n      echo \"$pkg\"\n    done\n  fi\n  exit 0\nfi\nprintf '%s\\n' \"$@\" >> \"$BREW_LOG\"\n")
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BREW_LOG\"\nif [ \"$1\" = \"list\" ]; then\n  shift 2\n  for pkg in \"$@\"; do\n    echo \"$pkg 1.0.0\"\n  done\n  exit 0\nfi\nif [ \"$1\" = \"outdated\" ]; then\n  shift 3\n  for pkg in \"$@\"; do\n    echo \"$pkg\"\n  done\n  exit 0\nfi\nexit 0\n")
 	logPath := filepath.Join(t.TempDir(), "brew.log")
 	t.Setenv("PATH", binDir)
 	t.Setenv("BREW_LOG", logPath)
@@ -186,7 +186,7 @@ func TestRunUpgradeDepsInstallsMissingFormula(t *testing.T) {
 	for _, name := range []string{"yt-dlp", "ffmpeg", "whisper-cli"} {
 		writeFakeExecutable(t, filepath.Join(binDir, name), "#!/bin/sh\nexit 0\n")
 	}
-	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nif [ \"$1\" = \"list\" ] && [ \"$2\" = \"--versions\" ]; then\n  if [ \"$3\" = \"whisper-cpp\" ]; then\n    >&2 echo \"No such keg: whisper-cpp\"\n    exit 1\n  fi\nfi\nif [ \"$1\" = \"outdated\" ]; then\n  shift\n  if [ \"$1\" = \"--formula\" ]; then\n    shift\n    for pkg in \"$@\"; do\n      echo \"$pkg\"\n    done\n  fi\n  exit 0\nfi\nprintf '%s\\n' \"$@\" >> \"$BREW_LOG\"\nexit 0\n")
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BREW_LOG\"\nif [ \"$1\" = \"list\" ]; then\n  shift 2\n  status=0\n  for pkg in \"$@\"; do\n    if [ \"$pkg\" = \"whisper-cpp\" ]; then\n      status=1\n    else\n      echo \"$pkg 1.0.0\"\n    fi\n  done\n  exit $status\nfi\nif [ \"$1\" = \"outdated\" ]; then\n  shift 3\n  for pkg in \"$@\"; do\n    echo \"$pkg\"\n  done\n  exit 0\nfi\nexit 0\n")
 	logPath := filepath.Join(t.TempDir(), "brew.log")
 	t.Setenv("PATH", binDir)
 	t.Setenv("BREW_LOG", logPath)
@@ -240,7 +240,7 @@ func TestRunUpgradeDepsNoOpWhenAllDependenciesCurrent(t *testing.T) {
 	for _, name := range []string{"yt-dlp", "ffmpeg", "whisper-cli"} {
 		writeFakeExecutable(t, filepath.Join(binDir, name), "#!/bin/sh\nexit 0\n")
 	}
-	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nif [ \"$1\" = \"list\" ] && [ \"$2\" = \"--versions\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"outdated\" ]; then\n  shift\n  if [ \"$1\" = \"--formula\" ]; then\n    shift\n    for pkg in \"$@\"; do\n      :\n    done\n  fi\n  exit 0\nfi\nprintf '%s\\n' \"$@\" >> \"$BREW_LOG\"\nexit 0\n")
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BREW_LOG\"\nif [ \"$1\" = \"list\" ]; then\n  shift 2\n  for pkg in \"$@\"; do\n    echo \"$pkg 1.0.0\"\n  done\n  exit 0\nfi\nif [ \"$1\" = \"outdated\" ]; then\n  exit 0\nfi\nexit 0\n")
 	logPath := filepath.Join(t.TempDir(), "brew.log")
 	t.Setenv("PATH", binDir)
 	t.Setenv("BREW_LOG", logPath)
@@ -262,44 +262,62 @@ func TestRunUpgradeDepsNoOpWhenAllDependenciesCurrent(t *testing.T) {
 	}
 }
 
-func TestIsBrewPackageOutdated(t *testing.T) {
+func TestBrewOutdatedPackages(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake shell executables use /bin/sh")
 	}
 	binDir := t.TempDir()
-	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nif [ \"$1\" = \"outdated\" ] && [ \"$2\" = \"--formula\" ]; then\n  if [ \"$3\" = \"yt-dlp\" ]; then\n    echo 'yt-dlp 2026.03.17_2 != 2026.03.17_2'\n    exit 0\n  fi\n  if [ \"$3\" = \"ffmpeg\" ]; then\n    exit 0\n  fi\nfi\nexit 0\n")
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nif [ \"$1\" = \"outdated\" ]; then\n  echo 'yt-dlp'\n  exit 1\nfi\nexit 0\n")
 	t.Setenv("PATH", binDir)
 
-	ok, err := isBrewPackageOutdated(context.Background(), "yt-dlp")
+	outdated, err := brewOutdatedPackages(context.Background(), []string{"yt-dlp", "ffmpeg"})
 	if err != nil {
-		t.Fatalf("isBrewPackageOutdated() error = %v", err)
+		t.Fatalf("brewOutdatedPackages() error = %v", err)
 	}
-	if !ok {
-		t.Fatalf("isBrewPackageOutdated() = false, want true")
+	if !outdated["yt-dlp"] {
+		t.Fatalf("brewOutdatedPackages() missing yt-dlp: %v", outdated)
 	}
-	ok, err = isBrewPackageOutdated(context.Background(), "ffmpeg")
-	if err != nil {
-		t.Fatalf("isBrewPackageOutdated() error = %v", err)
-	}
-	if ok {
-		t.Fatalf("isBrewPackageOutdated() = true, want false")
+	if outdated["ffmpeg"] {
+		t.Fatalf("brewOutdatedPackages() unexpectedly includes ffmpeg: %v", outdated)
 	}
 }
 
-func TestIsBrewPackageInstalledTreatsBrewUnavailableFormulaAsMissing(t *testing.T) {
+func TestBrewInstalledPackagesTreatsSilentExitOneAsMissing(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake shell executables use /bin/sh")
 	}
 	binDir := t.TempDir()
-	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nif [ \"$1\" = \"list\" ] && [ \"$2\" = \"--versions\" ]; then\n  >&2 echo 'Error: No such formula with the name \"whisper-cpp\"'\n  exit 1\nfi\nexit 0\n")
+	// Real brew prints versions for installed formulas and exits 1 with no
+	// output at all for missing ones.
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nif [ \"$1\" = \"list\" ]; then\n  echo 'yt-dlp 2026.03.17'\n  echo 'ffmpeg 7.1'\n  exit 1\nfi\nexit 0\n")
 	t.Setenv("PATH", binDir)
 
-	ok, err := isBrewPackageInstalled(context.Background(), "whisper-cpp")
+	installed, err := brewInstalledPackages(context.Background(), []string{"yt-dlp", "ffmpeg", "whisper-cpp"})
 	if err != nil {
-		t.Fatalf("isBrewPackageInstalled() error = %v", err)
+		t.Fatalf("brewInstalledPackages() error = %v", err)
 	}
-	if ok {
-		t.Fatalf("isBrewPackageInstalled() = true, want false")
+	if !installed["yt-dlp"] || !installed["ffmpeg"] {
+		t.Fatalf("brewInstalledPackages() missing installed packages: %v", installed)
+	}
+	if installed["whisper-cpp"] {
+		t.Fatalf("brewInstalledPackages() unexpectedly includes whisper-cpp: %v", installed)
+	}
+}
+
+func TestBrewInstalledPackagesStripsTapPrefix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell executables use /bin/sh")
+	}
+	binDir := t.TempDir()
+	writeFakeExecutable(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nif [ \"$1\" = \"list\" ]; then\n  echo 'homebrew/core/ffmpeg 7.1'\n  exit 0\nfi\nexit 0\n")
+	t.Setenv("PATH", binDir)
+
+	installed, err := brewInstalledPackages(context.Background(), []string{"ffmpeg"})
+	if err != nil {
+		t.Fatalf("brewInstalledPackages() error = %v", err)
+	}
+	if !installed["ffmpeg"] {
+		t.Fatalf("brewInstalledPackages() = %v, want ffmpeg", installed)
 	}
 }
 

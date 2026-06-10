@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/devosurf/cuescribe/internal/download"
 	"github.com/devosurf/cuescribe/internal/progress"
 )
 
@@ -104,6 +105,8 @@ func Download(ctx context.Context, entry Entry, dest string, out io.Writer) erro
 	}
 	partPath := dest + ".part"
 	start := fileSize(partPath)
+	ctx, guard := download.NewStallGuard(ctx, download.DefaultStallTimeout)
+	defer guard.Stop()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, entry.URL, nil)
 	if err != nil {
 		return err
@@ -111,10 +114,12 @@ func Download(ctx context.Context, entry Entry, dest string, out io.Writer) erro
 	if start > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", start))
 	}
-	client := &http.Client{Timeout: 0}
+	// No client timeout: model files are large and may take a long time on
+	// slow links; the stall guard aborts the transfer if data stops flowing.
+	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return guard.Wrap(err)
 	}
 	defer resp.Body.Close()
 	appendMode := start > 0 && resp.StatusCode == http.StatusPartialContent
@@ -134,16 +139,21 @@ func Download(ctx context.Context, entry Entry, dest string, out io.Writer) erro
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	fmt.Fprintf(out, "model: %s (%s)\n", entry.Name, progress.HumanBytes(entry.Size))
 	fmt.Fprintf(out, "destination: %s\n", dest)
 	if start > 0 {
 		fmt.Fprintf(out, "resuming at %s\n", progress.HumanBytes(start))
 	}
 	bar := progress.NewBar(out, "Downloading model", entry.Size)
-	written, err := copyWithProgress(f, resp.Body, bar, start)
-	if err != nil {
-		return err
+	written, copyErr := download.Copy(f, guard.Reader(resp.Body), bar, start)
+	// Close before verifying and renaming so the file is fully flushed and
+	// no write handle is open when it moves into place.
+	closeErr := f.Close()
+	if copyErr != nil {
+		return guard.Wrap(copyErr)
+	}
+	if closeErr != nil {
+		return closeErr
 	}
 	bar.Finish(fmt.Sprintf("downloaded %s", progress.HumanBytes(written)))
 	progress.Step(out, "Verifying checksum")
@@ -163,34 +173,4 @@ func fileSize(path string) int64 {
 		return 0
 	}
 	return info.Size()
-}
-
-func copyWithProgress(dst io.Writer, src io.Reader, bar *progress.Bar, start int64) (int64, error) {
-	buf := make([]byte, 1024*1024)
-	written := start
-	if bar != nil {
-		bar.Start(start)
-	}
-	for {
-		nr, er := src.Read(buf)
-		if nr > 0 {
-			nw, ew := dst.Write(buf[:nr])
-			if ew != nil {
-				return written, ew
-			}
-			if nr != nw {
-				return written, io.ErrShortWrite
-			}
-			written += int64(nw)
-			if bar != nil {
-				bar.Set(written)
-			}
-		}
-		if er == io.EOF {
-			return written, nil
-		}
-		if er != nil {
-			return written, er
-		}
-	}
 }

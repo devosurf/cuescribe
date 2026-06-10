@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -327,7 +328,7 @@ func requiredDependenciesForInput(input string, listFormats bool) []string {
 	if listFormats {
 		return []string{"yt-dlp"}
 	}
-	if isURL(input) {
+	if pipeline.IsURL(input) {
 		return requiredDependencies()
 	}
 	return []string{"ffmpeg", "whisper-cli"}
@@ -360,23 +361,29 @@ func upgradeDependencies(ctx context.Context, cmd *cobra.Command, names []string
 		return fmt.Errorf("Error: Homebrew is missing.\nFix: install Homebrew, then run brew upgrade %s", strings.Join(brewPackages(names), " "))
 	}
 	packages := brewPackages(names)
+	installed, err := brewInstalledPackages(ctx, packages)
+	if err != nil {
+		return err
+	}
 	install := []string{}
-	upgrade := []string{}
+	present := []string{}
 	for _, pkg := range packages {
-		installed, err := isBrewPackageInstalled(ctx, pkg)
+		if installed[pkg] {
+			present = append(present, pkg)
+		} else {
+			install = append(install, pkg)
+		}
+	}
+	upgrade := []string{}
+	if len(present) > 0 {
+		outdated, err := brewOutdatedPackages(ctx, present)
 		if err != nil {
 			return err
 		}
-		if installed {
-			outdated, err := isBrewPackageOutdated(ctx, pkg)
-			if err != nil {
-				return err
-			}
-			if outdated {
+		for _, pkg := range present {
+			if outdated[pkg] {
 				upgrade = append(upgrade, pkg)
 			}
-		} else {
-			install = append(install, pkg)
 		}
 	}
 	if len(install) > 0 {
@@ -393,32 +400,58 @@ func upgradeDependencies(ctx context.Context, cmd *cobra.Command, names []string
 	return runBrewCommand(ctx, cmd, "upgrade", upgrade)
 }
 
-func isBrewPackageOutdated(ctx context.Context, pkg string) (bool, error) {
-	result, err := runner.ExecRunner{Verbose: false, Stderr: io.Discard}.Run(ctx, "brew", "outdated", "--formula", pkg)
+// brewQuery runs a read-only brew command in one batched invocation.
+// Brew exits 1 from queries like "list --versions" when some of the named
+// packages are missing or unknown — that is an answer, not a failure — so
+// exit status 1 is tolerated and the output parsed as-is.
+func brewQuery(ctx context.Context, args ...string) (string, error) {
+	result, err := runner.ExecRunner{Verbose: false, Stderr: io.Discard}.Run(ctx, "brew", args...)
 	if err != nil {
-		return false, err
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			return "", err
+		}
 	}
-	out := strings.TrimSpace(string(result.Stdout))
-	if out == "" {
-		return false, nil
-	}
-	return true, nil
+	return string(result.Stdout), nil
 }
 
-func isBrewPackageInstalled(ctx context.Context, pkg string) (bool, error) {
-	_, err := runner.ExecRunner{Verbose: false, Stderr: io.Discard}.Run(ctx, "brew", "list", "--versions", pkg)
+// brewInstalledPackages reports which of the given formulas are installed,
+// based on "brew list --versions", which prints one "<name> <versions...>"
+// line per installed formula and nothing for missing ones.
+func brewInstalledPackages(ctx context.Context, packages []string) (map[string]bool, error) {
+	out, err := brewQuery(ctx, append([]string{"list", "--versions"}, packages...)...)
 	if err != nil {
-		details := strings.ToLower(err.Error())
-		if strings.Contains(details, "is not installed") ||
-			strings.Contains(details, "no such keg") ||
-			strings.Contains(details, "not installed") ||
-			strings.Contains(details, "no such formula") ||
-			strings.Contains(details, "no available formula") {
-			return false, nil
-		}
-		return false, err
+		return nil, err
 	}
-	return true, nil
+	return brewNamesFromLines(out), nil
+}
+
+// brewOutdatedPackages reports which of the given installed formulas are
+// outdated, based on "brew outdated --formula --quiet", which prints one
+// formula name per outdated package.
+func brewOutdatedPackages(ctx context.Context, packages []string) (map[string]bool, error) {
+	out, err := brewQuery(ctx, append([]string{"outdated", "--formula", "--quiet"}, packages...)...)
+	if err != nil {
+		return nil, err
+	}
+	return brewNamesFromLines(out), nil
+}
+
+func brewNamesFromLines(out string) map[string]bool {
+	names := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		// Names may be printed with a tap prefix such as homebrew/core/ffmpeg.
+		name := fields[0]
+		if idx := strings.LastIndex(name, "/"); idx >= 0 {
+			name = name[idx+1:]
+		}
+		names[name] = true
+	}
+	return names
 }
 
 func runBrewCommand(ctx context.Context, cmd *cobra.Command, subcommand string, packages []string) error {
@@ -504,6 +537,9 @@ func runSetupCookies(ctx context.Context, cmd *cobra.Command, opts cookieSetupOp
 		return fmt.Errorf("Error: cookie profile requires a browser.\nFix: pass --cookies-browser chrome --cookies-profile %s", strconv.Quote(opts.Profile))
 	} else if opts.Browser != "" {
 		browser := normalizeBrowserName(opts.Browser)
+		if !config.IsSupportedCookieBrowser(browser) {
+			return fmt.Errorf("Error: unsupported browser %q.\nFix: use one of %s", opts.Browser, strings.Join(config.SupportedCookieBrowsers, ", "))
+		}
 		profile := opts.Profile
 		if browser == "chrome" && profile == "" && opts.Prompt && isInteractiveInput(cmd) {
 			profile = promptChromeProfile(cmd, bufio.NewReader(cmd.InOrStdin()))
@@ -549,6 +585,9 @@ func runSetupCookies(ctx context.Context, cmd *cobra.Command, opts cookieSetupOp
 			}
 		}
 		browser = normalizeBrowserName(browser)
+		if !config.IsSupportedCookieBrowser(browser) {
+			return fmt.Errorf("Error: unsupported browser %q.\nFix: use one of %s", browser, strings.Join(config.SupportedCookieBrowsers, ", "))
+		}
 		profile := ""
 		if browser == "chrome" {
 			profile = promptChromeProfile(cmd, reader)
@@ -1262,10 +1301,6 @@ func isChromeProfileID(id string) bool {
 func isTerminal(file *os.File) bool {
 	info, err := file.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
-}
-
-func isURL(value string) bool {
-	return strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://")
 }
 
 func isInteractiveInput(cmd *cobra.Command) bool {

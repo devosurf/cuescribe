@@ -57,7 +57,7 @@ func (p Pipeline) Run(ctx context.Context, opts Options) (transcript.Document, e
 	source := normalizeDefault(opts.Source, "auto")
 	subsMode := normalizeDefault(opts.Subs, "any")
 	lang := normalizeDefault(opts.Lang, "auto")
-	if !isURL(opts.Input) {
+	if !IsURL(opts.Input) {
 		if source == "subs" {
 			return transcript.Document{}, fmt.Errorf("Error: local files do not support --source subs.\nFix: use --source audio or omit --source")
 		}
@@ -67,7 +67,7 @@ func (p Pipeline) Run(ctx context.Context, opts Options) (transcript.Document, e
 		progress.Step(opts.Progress, "Using local media file")
 		return p.fromAudio(ctx, opts, opts.Input, "", "", nil)
 	}
-	md, err := ytdlp.FetchMetadata(ctx, p.Runner, opts.Input, youtubeCookies(opts.Input, opts.Config.Cookies))
+	md, err := ytdlp.FetchMetadata(ctx, p.Runner, opts.Input, ytdlp.CookiesForInput(opts.Input, opts.Config.Cookies))
 	if err != nil {
 		return transcript.Document{}, err
 	}
@@ -140,7 +140,7 @@ func (p Pipeline) fromSubtitles(ctx context.Context, opts Options, md ytdlp.Meta
 
 func (p Pipeline) fromDownloadedAudio(ctx context.Context, opts Options, md ytdlp.Metadata) (transcript.Document, error) {
 	return withTempDir(opts.Paths.CacheDir, func(dir string) (transcript.Document, error) {
-		mediaPath, err := ytdlp.DownloadMedia(ctx, p.Runner, opts.Input, dir, youtubeCookies(opts.Input, opts.Config.Cookies))
+		mediaPath, err := ytdlp.DownloadMedia(ctx, p.Runner, opts.Input, dir, ytdlp.CookiesForInput(opts.Input, opts.Config.Cookies))
 		if err != nil {
 			return transcript.Document{}, err
 		}
@@ -207,15 +207,10 @@ func normalizeDefault(value, fallback string) string {
 	return value
 }
 
-func isURL(value string) bool {
+// IsURL reports whether the input names a remote media URL rather than a
+// local file path.
+func IsURL(value string) bool {
 	return strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://")
-}
-
-func youtubeCookies(input string, cookies config.CookieConfig) config.CookieConfig {
-	if !strings.Contains(input, "youtube.com") && !strings.Contains(input, "youtu.be") {
-		cookies.Enabled = false
-	}
-	return cookies
 }
 
 func titleFromPath(path string) string {
@@ -225,8 +220,4 @@ func titleFromPath(path string) string {
 		base = strings.TrimSuffix(base, ext)
 	}
 	return base
-}
-
-func ReadAll(r io.Reader) ([]byte, error) {
-	return io.ReadAll(r)
 }

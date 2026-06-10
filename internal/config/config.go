@@ -142,6 +142,19 @@ func LoadDefault() (Config, Paths, error) {
 	return cfg, paths, nil
 }
 
+// SupportedCookieBrowsers are the browser names accepted for yt-dlp's
+// --cookies-from-browser flag.
+var SupportedCookieBrowsers = []string{"safari", "chrome", "firefox", "brave", "edge"}
+
+func IsSupportedCookieBrowser(name string) bool {
+	for _, browser := range SupportedCookieBrowsers {
+		if browser == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (c CookieConfig) YTDLPCookieArgs() []string {
 	if !c.Enabled || strings.TrimSpace(c.Browser) == "" {
 		return nil

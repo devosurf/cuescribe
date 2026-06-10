@@ -84,27 +84,41 @@ func parseWhisperJSON(path string) ([]transcript.Segment, string, error) {
 		if text == "" {
 			continue
 		}
+		start, err := parseWhisperTimestamp(item.Timestamps.From)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to parse whisper JSON: %w", err)
+		}
+		end, err := parseWhisperTimestamp(item.Timestamps.To)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to parse whisper JSON: %w", err)
+		}
 		segments = append(segments, transcript.Segment{
-			Start: parseWhisperTimestamp(item.Timestamps.From),
-			End:   parseWhisperTimestamp(item.Timestamps.To),
+			Start: start,
+			End:   end,
 			Text:  text,
 		})
 	}
 	return segments, payload.Result.Language, nil
 }
 
-func parseWhisperTimestamp(s string) time.Duration {
-	s = strings.TrimSpace(s)
-	s = strings.ReplaceAll(s, ",", ".")
-	if s == "" {
-		return 0
-	}
-	parts := strings.Split(s, ":")
+func parseWhisperTimestamp(s string) (time.Duration, error) {
+	raw := strings.TrimSpace(s)
+	normalized := strings.ReplaceAll(raw, ",", ".")
+	parts := strings.Split(normalized, ":")
 	if len(parts) != 3 {
-		return 0
+		return 0, fmt.Errorf("invalid timestamp %q", raw)
 	}
-	hours, _ := time.ParseDuration(parts[0] + "h")
-	minutes, _ := time.ParseDuration(parts[1] + "m")
-	sec, _ := time.ParseDuration(parts[2] + "s")
-	return hours + minutes + sec
+	hours, err := time.ParseDuration(parts[0] + "h")
+	if err != nil {
+		return 0, fmt.Errorf("invalid timestamp %q", raw)
+	}
+	minutes, err := time.ParseDuration(parts[1] + "m")
+	if err != nil {
+		return 0, fmt.Errorf("invalid timestamp %q", raw)
+	}
+	sec, err := time.ParseDuration(parts[2] + "s")
+	if err != nil {
+		return 0, fmt.Errorf("invalid timestamp %q", raw)
+	}
+	return hours + minutes + sec, nil
 }
