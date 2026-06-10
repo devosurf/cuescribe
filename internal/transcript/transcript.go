@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 type Mode string
 
@@ -39,6 +39,8 @@ type Document struct {
 	DetectedLanguage string
 	Mode             Mode
 	Translated       bool
+	Summary          string
+	SummaryModel     string
 	Chapters         []Chapter
 	Segments         []Segment
 }

@@ -35,6 +35,8 @@ type rootOptions struct {
 	subs           string
 	lang           string
 	translate      bool
+	summarize      bool
+	summaryLang    string
 	format         string
 	noTimestamps   bool
 	timestampLinks bool
@@ -74,7 +76,7 @@ func NewRootCommand() *cobra.Command {
 				return cmd.Help()
 			}
 			if opts.listFormats {
-				if err := ensureDependencies(cmd.Context(), cmd, args[0], true); err != nil {
+				if err := ensureDependencies(cmd.Context(), cmd, args[0], true, false); err != nil {
 					return err
 				}
 				return runListFormats(cmd.Context(), cmd, args[0])
@@ -82,12 +84,17 @@ func NewRootCommand() *cobra.Command {
 			if err := validateRootOptions(opts); err != nil {
 				return err
 			}
-			if err := ensureDependencies(cmd.Context(), cmd, args[0], false); err != nil {
+			if err := ensureDependencies(cmd.Context(), cmd, args[0], false, opts.summarize); err != nil {
 				return err
 			}
 			cfg, paths, err := config.LoadDefault()
 			if err != nil {
 				return err
+			}
+			if opts.summarize {
+				if err := ensureSummaryModel(cmd.Context(), cmd, &cfg, paths); err != nil {
+					return err
+				}
 			}
 			logFile, logPath, err := logging.OpenRunLog(paths)
 			if err != nil {
@@ -100,14 +107,16 @@ func NewRootCommand() *cobra.Command {
 			}
 			progressOut := cmd.ErrOrStderr()
 			doc, err := pipeline.New(runner.ExecRunner{Verbose: opts.verbose || opts.debug, Stderr: cmd.ErrOrStderr(), Log: logWriter(opts, logFile, cmd.ErrOrStderr()), Progress: progressOut}).Run(cmd.Context(), pipeline.Options{
-				Input:     args[0],
-				Source:    opts.source,
-				Subs:      opts.subs,
-				Lang:      opts.lang,
-				Translate: opts.translate,
-				Config:    cfg,
-				Paths:     paths,
-				Progress:  progressOut,
+				Input:       args[0],
+				Source:      opts.source,
+				Subs:        opts.subs,
+				Lang:        opts.lang,
+				Translate:   opts.translate,
+				Summarize:   opts.summarize,
+				SummaryLang: opts.summaryLang,
+				Config:      cfg,
+				Paths:       paths,
+				Progress:    progressOut,
 			})
 			if err != nil {
 				return err
@@ -134,6 +143,8 @@ func NewRootCommand() *cobra.Command {
 	cmd.Flags().StringVar(&opts.subs, "subs", "any", "subtitle preference: any, manual, or auto")
 	cmd.Flags().StringVar(&opts.lang, "lang", "auto", "spoken language, such as auto, sv, en, or Swedish")
 	cmd.Flags().BoolVar(&opts.translate, "translate", false, "translate to English")
+	cmd.Flags().BoolVar(&opts.summarize, "summarize", false, "add a local LLM summary to the output")
+	cmd.Flags().StringVar(&opts.summaryLang, "summary-lang", "", "summary language, such as sv or en (default: same as transcript)")
 	cmd.Flags().StringVar(&opts.format, "format", "markdown", "output format: markdown or json")
 	cmd.Flags().BoolVar(&opts.noTimestamps, "no-timestamps", false, "omit timestamps in Markdown output")
 	cmd.Flags().BoolVar(&opts.timestampLinks, "timestamp-links", false, "link Markdown timestamps to the source URL")
@@ -196,6 +207,7 @@ func oneOf(name, value string, allowed ...string) error {
 func newSetupCommand() *cobra.Command {
 	var yes bool
 	var modelName string
+	var summaryModelName string
 	var cookiesBrowser string
 	var cookiesProfile string
 	var requireCookies bool
@@ -207,6 +219,9 @@ func newSetupCommand() *cobra.Command {
 				return err
 			}
 			if err := runSetupModel(cmd.Context(), cmd, modelName); err != nil {
+				return err
+			}
+			if err := offerSetupSummary(cmd.Context(), cmd, summaryModelName, yes); err != nil {
 				return err
 			}
 			if err := runSetupCookies(cmd.Context(), cmd, cookieSetupOptions{
@@ -222,6 +237,7 @@ func newSetupCommand() *cobra.Command {
 	}
 	cmd.PersistentFlags().BoolVar(&yes, "yes", false, "install missing Homebrew dependencies without prompting")
 	cmd.PersistentFlags().StringVar(&modelName, "model", "", "model to download (default: recommended for detected hardware)")
+	cmd.PersistentFlags().StringVar(&summaryModelName, "summary-model", "", "summary model for --summarize (default: recommended for detected hardware)")
 	cmd.PersistentFlags().BoolVar(&requireCookies, "require-cookies", false, "fail setup unless YouTube browser cookies are configured and usable")
 	cmd.PersistentFlags().StringVar(&cookiesBrowser, "cookies-browser", "", "browser name for YouTube cookies, such as safari, chrome, or firefox")
 	cmd.PersistentFlags().StringVar(&cookiesProfile, "cookies-profile", "", "browser profile name for YouTube cookies")
@@ -237,6 +253,13 @@ func newSetupCommand() *cobra.Command {
 		Short: "Download and verify a Whisper model",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSetupModel(cmd.Context(), cmd, modelName)
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "summary",
+		Short: "Download and verify a local summary model for --summarize",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runSetupSummary(cmd.Context(), cmd, summaryModelName)
 		},
 	})
 	var browser, profile string
@@ -273,8 +296,8 @@ func runUpgradeDeps(ctx context.Context, cmd *cobra.Command) error {
 	return upgradeDependencies(ctx, cmd, requiredDependencies())
 }
 
-func ensureDependencies(ctx context.Context, cmd *cobra.Command, input string, listFormats bool) error {
-	deps := requiredDependenciesForInput(input, listFormats)
+func ensureDependencies(ctx context.Context, cmd *cobra.Command, input string, listFormats, summarize bool) error {
+	deps := requiredDependenciesForInput(input, listFormats, summarize)
 	missing := []string{}
 	for _, dep := range deps {
 		if !runner.LookPath(dep) {
@@ -325,14 +348,18 @@ func ensureDependencies(ctx context.Context, cmd *cobra.Command, input string, l
 	return nil
 }
 
-func requiredDependenciesForInput(input string, listFormats bool) []string {
+func requiredDependenciesForInput(input string, listFormats, summarize bool) []string {
 	if listFormats {
 		return []string{"yt-dlp"}
 	}
+	deps := []string{"ffmpeg", "whisper-cli"}
 	if pipeline.IsURL(input) {
-		return requiredDependencies()
+		deps = requiredDependencies()
 	}
-	return []string{"ffmpeg", "whisper-cli"}
+	if summarize {
+		deps = append(deps, "llama-server")
+	}
+	return deps
 }
 
 func installDependencies(ctx context.Context, cmd *cobra.Command, yes bool, names []string) error {
@@ -522,10 +549,17 @@ func runSetupModel(ctx context.Context, cmd *cobra.Command, modelName string) er
 // wins; otherwise the hardware-based recommendation is used, which
 // interactive users can override at a prompt.
 func resolveSetupModel(cmd *cobra.Command, modelName string, hw hardware.Info, interactive bool) (string, error) {
-	if strings.TrimSpace(modelName) != "" {
-		return strings.TrimSpace(modelName), nil
+	return resolveModelChoice(cmd, modelName, hardware.Recommend(hw).WhisperModel, model.Names(), hw, interactive)
+}
+
+func resolveSetupSummaryModel(cmd *cobra.Command, modelName string, hw hardware.Info, interactive bool) (string, error) {
+	return resolveModelChoice(cmd, modelName, hardware.Recommend(hw).SummaryModel, model.SummaryNames(), hw, interactive)
+}
+
+func resolveModelChoice(cmd *cobra.Command, explicit, recommended string, options []string, hw hardware.Info, interactive bool) (string, error) {
+	if strings.TrimSpace(explicit) != "" {
+		return strings.TrimSpace(explicit), nil
 	}
-	recommended := hardware.RecommendedWhisperModel(hw)
 	if desc := hw.String(); desc != "" {
 		fmt.Fprintf(cmd.OutOrStdout(), "detected hardware: %s\n", desc)
 	}
@@ -533,7 +567,7 @@ func resolveSetupModel(cmd *cobra.Command, modelName string, hw hardware.Info, i
 	if !interactive {
 		return recommended, nil
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "model [%s] (options: %s): ", recommended, strings.Join(model.Names(), ", "))
+	fmt.Fprintf(cmd.OutOrStdout(), "model [%s] (options: %s): ", recommended, strings.Join(options, ", "))
 	reader := bufio.NewReader(cmd.InOrStdin())
 	answer, _ := reader.ReadString('\n')
 	answer = strings.TrimSpace(answer)
@@ -541,6 +575,92 @@ func resolveSetupModel(cmd *cobra.Command, modelName string, hw hardware.Info, i
 		return recommended, nil
 	}
 	return answer, nil
+}
+
+// runSetupSummary downloads a summary model and enables --summarize in the
+// config, mirroring runSetupModel for Whisper models.
+func runSetupSummary(ctx context.Context, cmd *cobra.Command, modelName string) error {
+	paths, err := config.ResolvePaths()
+	if err != nil {
+		return err
+	}
+	modelName, err = resolveSetupSummaryModel(cmd, modelName, hardware.Detect(), isInteractiveInput(cmd))
+	if err != nil {
+		return err
+	}
+	entry, ok := model.GetSummary(modelName)
+	if !ok {
+		return fmt.Errorf("Error: unknown summary model %q.\nFix: use one of %s", modelName, strings.Join(model.SummaryNames(), ", "))
+	}
+	dest := filepath.Join(paths.ModelDir, entry.File)
+	if err := model.Download(ctx, entry, dest, cmd.OutOrStdout()); err != nil {
+		return err
+	}
+	cfg, err := config.Load(paths.ConfigFile, config.Default(paths))
+	if err != nil {
+		return err
+	}
+	cfg.Summary = config.SummaryConfig{Enabled: true, Model: entry.Name, Path: dest}
+	if err := config.Save(paths.ConfigFile, cfg); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "config saved: %s\n", paths.ConfigFile)
+	return nil
+}
+
+// offerSetupSummary asks interactive setup runs whether to enable local
+// summaries. Non-interactive and --yes runs skip it with a hint so installs
+// stay small; an explicit --summary-model opts in directly.
+func offerSetupSummary(ctx context.Context, cmd *cobra.Command, modelName string, yes bool) error {
+	if strings.TrimSpace(modelName) != "" {
+		return runSetupSummary(ctx, cmd, modelName)
+	}
+	if yes || !isInteractiveInput(cmd) {
+		fmt.Fprintln(cmd.OutOrStdout(), "summaries: skipped; enable later with cuescribe setup summary")
+		return nil
+	}
+	fmt.Fprint(cmd.OutOrStdout(), "set up local summaries for --summarize? [y/N] ")
+	reader := bufio.NewReader(cmd.InOrStdin())
+	answer, _ := reader.ReadString('\n')
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	if answer != "y" && answer != "yes" {
+		fmt.Fprintln(cmd.OutOrStdout(), "summaries: skipped; enable later with cuescribe setup summary")
+		return nil
+	}
+	return runSetupSummary(ctx, cmd, "")
+}
+
+// ensureSummaryModel makes --summarize usable: if no summary model is
+// configured yet, interactive runs are offered the recommended download and
+// non-interactive runs get an actionable error.
+func ensureSummaryModel(ctx context.Context, cmd *cobra.Command, cfg *config.Config, paths config.Paths) error {
+	if cfg.Summary.Model != "" && cfg.Summary.Path != "" {
+		if _, err := os.Stat(cfg.Summary.Path); err == nil {
+			return nil
+		}
+	}
+	if !isInteractiveInput(cmd) {
+		return fmt.Errorf("Error: --summarize needs a local summary model.\nFix: run cuescribe setup summary")
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "--summarize needs a local summary model.")
+	rec := hardware.Recommend(hardware.Detect()).SummaryModel
+	entry, _ := model.GetSummary(rec)
+	fmt.Fprintf(cmd.OutOrStdout(), "download %s (%s) now? [Y/n] ", entry.Name, progress.HumanBytes(entry.Size))
+	reader := bufio.NewReader(cmd.InOrStdin())
+	answer, _ := reader.ReadString('\n')
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	if answer == "n" || answer == "no" {
+		return fmt.Errorf("Error: --summarize needs a local summary model.\nFix: run cuescribe setup summary")
+	}
+	if err := runSetupSummary(ctx, cmd, rec); err != nil {
+		return err
+	}
+	updated, _, err := config.LoadDefault()
+	if err != nil {
+		return err
+	}
+	*cfg = updated
+	return nil
 }
 
 type cookieSetupOptions struct {
@@ -1068,9 +1188,12 @@ func newCompletionCommand(root *cobra.Command) *cobra.Command {
 func brewPackages(names []string) []string {
 	out := make([]string, 0, len(names))
 	for _, name := range names {
-		if name == "whisper-cli" {
+		switch name {
+		case "whisper-cli":
 			out = append(out, "whisper-cpp")
-		} else {
+		case "llama-server":
+			out = append(out, "llama.cpp")
+		default:
 			out = append(out, name)
 		}
 	}

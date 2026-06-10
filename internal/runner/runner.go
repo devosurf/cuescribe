@@ -124,6 +124,8 @@ func brewPackage(name string) string {
 	switch name {
 	case "whisper-cli":
 		return "whisper-cpp"
+	case "llama-server":
+		return "llama.cpp"
 	default:
 		return name
 	}

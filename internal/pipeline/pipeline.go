@@ -16,6 +16,7 @@ import (
 	"github.com/devosurf/cuescribe/internal/progress"
 	"github.com/devosurf/cuescribe/internal/runner"
 	"github.com/devosurf/cuescribe/internal/subtitles"
+	"github.com/devosurf/cuescribe/internal/summary"
 	"github.com/devosurf/cuescribe/internal/transcript"
 	"github.com/devosurf/cuescribe/internal/ytdlp"
 )
@@ -26,6 +27,8 @@ type Options struct {
 	Subs         string
 	Lang         string
 	Translate    bool
+	Summarize    bool
+	SummaryLang  string
 	Config       config.Config
 	Paths        config.Paths
 	PlatformOS   string
@@ -33,19 +36,46 @@ type Options struct {
 	Progress     io.Writer
 }
 
+// DocumentSummarizer generates a summary for a finished transcript.
+type DocumentSummarizer interface {
+	Summarize(ctx context.Context, opts summary.Options, doc transcript.Document) (string, error)
+}
+
 type Pipeline struct {
-	Runner runner.CommandRunner
-	Client *http.Client
+	Runner     runner.CommandRunner
+	Client     *http.Client
+	Summarizer DocumentSummarizer
 }
 
 func New(r runner.CommandRunner) Pipeline {
 	return Pipeline{
-		Runner: r,
-		Client: &http.Client{Timeout: 60 * time.Second},
+		Runner:     r,
+		Client:     &http.Client{Timeout: 60 * time.Second},
+		Summarizer: summary.Summarizer{},
 	}
 }
 
 func (p Pipeline) Run(ctx context.Context, opts Options) (transcript.Document, error) {
+	doc, err := p.transcribe(ctx, opts)
+	if err != nil {
+		return transcript.Document{}, err
+	}
+	if opts.Summarize {
+		progress.Step(opts.Progress, "Summarizing with %s", opts.Config.Summary.Model)
+		text, err := p.Summarizer.Summarize(ctx, summary.Options{
+			ModelPath: opts.Config.Summary.Path,
+			Language:  opts.SummaryLang,
+		}, doc)
+		if err != nil {
+			return transcript.Document{}, err
+		}
+		doc.Summary = text
+		doc.SummaryModel = opts.Config.Summary.Model
+	}
+	return doc, nil
+}
+
+func (p Pipeline) transcribe(ctx context.Context, opts Options) (transcript.Document, error) {
 	if opts.Input == "" {
 		return transcript.Document{}, fmt.Errorf("input is required")
 	}

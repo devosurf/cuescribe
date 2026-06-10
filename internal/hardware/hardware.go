@@ -22,16 +22,30 @@ func (i Info) String() string {
 	}
 }
 
-// RecommendedWhisperModel maps detected hardware to the Whisper model that
-// balances accuracy against memory headroom while transcribing alongside
-// other applications. Unknown hardware gets the conservative default.
-func RecommendedWhisperModel(info Info) string {
+// Recommendation pairs the Whisper and summary models suited to the
+// detected hardware. The two never run concurrently — transcription
+// finishes before summarization starts — so each tier is sized against
+// total RAM independently, with headroom for other applications.
+type Recommendation struct {
+	WhisperModel string
+	SummaryModel string
+}
+
+// Recommend maps detected hardware to model choices. Unknown hardware gets
+// the conservative defaults.
+func Recommend(info Info) Recommendation {
 	switch {
 	case info.RAMGB >= 32:
-		return "large-v3-turbo"
+		return Recommendation{WhisperModel: "large-v3-turbo", SummaryModel: "qwen3-8b"}
 	case info.RAMGB >= 16:
-		return "medium"
+		return Recommendation{WhisperModel: "medium", SummaryModel: "qwen3-4b"}
 	default:
-		return "small"
+		return Recommendation{WhisperModel: "small", SummaryModel: "qwen3-1.7b"}
 	}
+}
+
+// RecommendedWhisperModel maps detected hardware to the Whisper model that
+// balances accuracy against memory headroom while transcribing.
+func RecommendedWhisperModel(info Info) string {
+	return Recommend(info).WhisperModel
 }

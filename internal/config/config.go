@@ -22,8 +22,9 @@ type Paths struct {
 }
 
 type Config struct {
-	Model   ModelConfig  `toml:"model"`
-	Cookies CookieConfig `toml:"cookies"`
+	Model   ModelConfig   `toml:"model"`
+	Cookies CookieConfig  `toml:"cookies"`
+	Summary SummaryConfig `toml:"summary"`
 }
 
 type ModelConfig struct {
@@ -35,6 +36,12 @@ type CookieConfig struct {
 	Enabled bool   `toml:"enabled"`
 	Browser string `toml:"browser"`
 	Profile string `toml:"profile"`
+}
+
+type SummaryConfig struct {
+	Enabled bool   `toml:"enabled"`
+	Model   string `toml:"model"`
+	Path    string `toml:"path"`
 }
 
 type InstallState struct {

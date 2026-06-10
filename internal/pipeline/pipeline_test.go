@@ -12,6 +12,7 @@ import (
 
 	"github.com/devosurf/cuescribe/internal/config"
 	"github.com/devosurf/cuescribe/internal/runner"
+	"github.com/devosurf/cuescribe/internal/summary"
 	"github.com/devosurf/cuescribe/internal/transcript"
 	"github.com/devosurf/cuescribe/internal/ytdlp"
 )
@@ -152,5 +153,98 @@ func TestYouTubeCookiesOnlyAttachForYouTube(t *testing.T) {
 	}
 	if got := strings.Join(ytdlp.CookiesForInput("https://youtube.com/watch?v=1", cookies).YTDLPCookieArgs(), " "); !strings.Contains(got, "safari") {
 		t.Fatalf("YouTube cookie args = %q", got)
+	}
+}
+
+type fakeSummarizer struct {
+	called bool
+	opts   summary.Options
+}
+
+func (f *fakeSummarizer) Summarize(ctx context.Context, opts summary.Options, doc transcript.Document) (string, error) {
+	f.called = true
+	f.opts = opts
+	return "a summary", nil
+}
+
+func audioFakeRunner(t *testing.T) fakeRunner {
+	return fakeRunner(func(ctx context.Context, name string, args ...string) (runner.Result, error) {
+		switch name {
+		case "ffmpeg":
+			return runner.Result{}, nil
+		case "whisper-cli":
+			outBase := argAfter(args, "--output-file")
+			if outBase == "" {
+				t.Fatalf("whisper args missing --output-file: %v", args)
+			}
+			data := `{"result":{"language":"sv"},"transcription":[{"timestamps":{"from":"00:00:01.000","to":"00:00:02.000"},"text":" Hej "}]}`
+			if err := os.WriteFile(outBase+".json", []byte(data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return runner.Result{}, nil
+		default:
+			t.Fatalf("unexpected command: %s %v", name, args)
+			return runner.Result{}, nil
+		}
+	})
+}
+
+func TestRunSummarizesWhenEnabled(t *testing.T) {
+	tmp := t.TempDir()
+	input := filepath.Join(tmp, "talk.mp3")
+	if err := os.WriteFile(input, []byte("media"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeSummarizer{}
+	p := New(audioFakeRunner(t))
+	p.Summarizer = fake
+	paths := config.PathsForHome(tmp)
+	cfg := config.Config{Summary: config.SummaryConfig{Enabled: true, Model: "qwen3-4b", Path: filepath.Join(tmp, "model.gguf")}}
+	doc, err := p.Run(context.Background(), Options{
+		Input:        input,
+		Summarize:    true,
+		SummaryLang:  "en",
+		Config:       cfg,
+		Paths:        paths,
+		PlatformOS:   "darwin",
+		PlatformArch: "arm64",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !fake.called {
+		t.Fatal("summarizer was not called")
+	}
+	if fake.opts.Language != "en" || fake.opts.ModelPath != cfg.Summary.Path {
+		t.Fatalf("summarizer opts = %+v", fake.opts)
+	}
+	if doc.Summary != "a summary" || doc.SummaryModel != "qwen3-4b" {
+		t.Fatalf("doc summary = %q model = %q", doc.Summary, doc.SummaryModel)
+	}
+}
+
+func TestRunSkipsSummaryByDefault(t *testing.T) {
+	tmp := t.TempDir()
+	input := filepath.Join(tmp, "talk.mp3")
+	if err := os.WriteFile(input, []byte("media"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeSummarizer{}
+	p := New(audioFakeRunner(t))
+	p.Summarizer = fake
+	doc, err := p.Run(context.Background(), Options{
+		Input:        input,
+		Paths:        config.PathsForHome(tmp),
+		PlatformOS:   "darwin",
+		PlatformArch: "arm64",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if fake.called {
+		t.Fatal("summarizer called without --summarize")
+	}
+	if doc.Summary != "" {
+		t.Fatalf("doc.Summary = %q, want empty", doc.Summary)
 	}
 }

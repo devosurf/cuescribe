@@ -336,7 +336,7 @@ func TestEnsureDependenciesSkipsWhenAllPresentAndCurrent(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetIn(&bytes.Buffer{})
-	if err := ensureDependencies(context.Background(), cmd, "https://www.youtube.com/watch?v=abc", false); err != nil {
+	if err := ensureDependencies(context.Background(), cmd, "https://www.youtube.com/watch?v=abc", false, false); err != nil {
 		t.Fatalf("ensureDependencies() error = %v; stdout = %q", err, out.String())
 	}
 }
@@ -356,7 +356,7 @@ func TestEnsureDependenciesErrorsWhenMissingDependenciesNonInteractive(t *testin
 	var errOut bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&errOut)
-	err := ensureDependencies(context.Background(), cmd, "https://www.youtube.com/watch?v=abc", false)
+	err := ensureDependencies(context.Background(), cmd, "https://www.youtube.com/watch?v=abc", false, false)
 	if err == nil {
 		t.Fatal("ensureDependencies() expected non-interactive missing dependency error, got nil")
 	}
@@ -378,7 +378,7 @@ func TestEnsureDependenciesFailsNonInteractiveWhenYTDLPOld(t *testing.T) {
 	cmd.SetIn(&bytes.Buffer{})
 	var out bytes.Buffer
 	cmd.SetOut(&out)
-	err := ensureDependencies(context.Background(), cmd, "https://www.youtube.com/watch?v=abc", false)
+	err := ensureDependencies(context.Background(), cmd, "https://www.youtube.com/watch?v=abc", false, false)
 	if err == nil {
 		t.Fatalf("ensureDependencies() expected error, got nil")
 	}
@@ -388,11 +388,11 @@ func TestEnsureDependenciesFailsNonInteractiveWhenYTDLPOld(t *testing.T) {
 }
 
 func TestRequiredDependenciesForInput(t *testing.T) {
-	got := requiredDependenciesForInput("https://youtu.be/example", false)
+	got := requiredDependenciesForInput("https://youtu.be/example", false, false)
 	assertStrings(t, got, []string{"yt-dlp", "ffmpeg", "whisper-cli"})
-	got = requiredDependenciesForInput("/path/to/file.mp4", false)
+	got = requiredDependenciesForInput("/path/to/file.mp4", false, false)
 	assertStrings(t, got, []string{"ffmpeg", "whisper-cli"})
-	got = requiredDependenciesForInput("https://youtu.be/example", true)
+	got = requiredDependenciesForInput("https://youtu.be/example", true, false)
 	assertStrings(t, got, []string{"yt-dlp"})
 }
 
@@ -682,4 +682,38 @@ func TestResolveSetupModelInteractiveOverride(t *testing.T) {
 	if got != "base" {
 		t.Fatalf("resolveSetupModel() = %q, want base", got)
 	}
+}
+
+func TestRequiredDependenciesIncludeLlamaServerForSummarize(t *testing.T) {
+	got := requiredDependenciesForInput("https://youtu.be/id", false, true)
+	if !containsString(got, "llama-server") || !containsString(got, "yt-dlp") {
+		t.Fatalf("deps = %v, want yt-dlp and llama-server", got)
+	}
+	got = requiredDependenciesForInput("file.mp3", false, true)
+	if !containsString(got, "llama-server") || containsString(got, "yt-dlp") {
+		t.Fatalf("deps = %v, want llama-server without yt-dlp", got)
+	}
+	got = requiredDependenciesForInput("file.mp3", false, false)
+	if containsString(got, "llama-server") {
+		t.Fatalf("deps = %v, llama-server should require --summarize", got)
+	}
+}
+
+func TestResolveSetupSummaryModelUsesRecommendation(t *testing.T) {
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	got, err := resolveSetupSummaryModel(cmd, "", hardware.Info{RAMGB: 32}, false)
+	if err != nil {
+		t.Fatalf("resolveSetupSummaryModel() error = %v", err)
+	}
+	if got != "qwen3-8b" {
+		t.Fatalf("resolveSetupSummaryModel() = %q, want qwen3-8b", got)
+	}
+}
+
+func TestBrewPackagesMapsLlamaServer(t *testing.T) {
+	got := brewPackages([]string{"llama-server", "whisper-cli", "yt-dlp"})
+	want := []string{"llama.cpp", "whisper-cpp", "yt-dlp"}
+	assertStrings(t, got, want)
 }

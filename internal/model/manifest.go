@@ -60,6 +60,33 @@ var entries = map[string]Entry{
 	},
 }
 
+// summaryEntries are the local LLMs offered for --summarize, pinned to
+// exact GGUF files. All run through llama-cli; --reasoning-budget 0
+// disables thinking on the hybrid Qwen3 models.
+var summaryEntries = map[string]Entry{
+	"qwen3-1.7b": {
+		Name:   "qwen3-1.7b",
+		File:   "Qwen3-1.7B-Q4_K_M.gguf",
+		URL:    "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf?download=true",
+		SHA256: "b139949c5bd74937ad8ed8c8cf3d9ffb1e99c866c823204dc42c0d91fa181897",
+		Size:   1107409472,
+	},
+	"qwen3-4b": {
+		Name:   "qwen3-4b",
+		File:   "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+		URL:    "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf?download=true",
+		SHA256: "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597",
+		Size:   2497281120,
+	},
+	"qwen3-8b": {
+		Name:   "qwen3-8b",
+		File:   "Qwen3-8B-Q4_K_M.gguf",
+		URL:    "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf?download=true",
+		SHA256: "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785",
+		Size:   5027783488,
+	},
+}
+
 func Get(name string) (Entry, bool) {
 	entry, ok := entries[name]
 	return entry, ok
@@ -67,6 +94,15 @@ func Get(name string) (Entry, bool) {
 
 func Names() []string {
 	return []string{"tiny", "base", "small", "medium", "large-v3-turbo"}
+}
+
+func GetSummary(name string) (Entry, bool) {
+	entry, ok := summaryEntries[name]
+	return entry, ok
+}
+
+func SummaryNames() []string {
+	return []string{"qwen3-1.7b", "qwen3-4b", "qwen3-8b"}
 }
 
 func VerifyFile(path, want string) error {

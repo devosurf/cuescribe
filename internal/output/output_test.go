@@ -52,7 +52,7 @@ func TestRenderJSONKeepsSegmentTiming(t *testing.T) {
 		t.Fatalf("Render() error = %v", err)
 	}
 	got := string(data)
-	for _, want := range []string{`"schema_version": 1`, `"start_ms": 1500`, `"speaker": null`} {
+	for _, want := range []string{`"schema_version": 2`, `"start_ms": 1500`, `"speaker": null`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("json missing %q:\n%s", want, got)
 		}
@@ -150,5 +150,54 @@ func TestSanitizeFilenameSpacesAndSymbols(t *testing.T) {
 	}
 	if path != "My_Cool_Video__The_Final__Cut.md" {
 		t.Fatalf("resolvePath() = %q, want underscores", path)
+	}
+}
+
+func TestRenderMarkdownIncludesSummary(t *testing.T) {
+	doc := transcript.Document{
+		Title:        "Video",
+		Summary:      "A short summary.\n\n- point one\n- point two",
+		SummaryModel: "qwen3-4b",
+		Segments:     []transcript.Segment{{Text: "Hello"}},
+	}
+	data, _, err := Render(doc, Options{Format: FormatMarkdown})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "## Summary\n\nA short summary.") {
+		t.Fatalf("markdown missing summary section: %q", got)
+	}
+	if !strings.Contains(got, "Summary model: qwen3-4b") {
+		t.Fatalf("markdown missing summary model meta: %q", got)
+	}
+	if strings.Index(got, "## Summary") > strings.Index(got, "## Transcript") {
+		t.Fatalf("summary should precede transcript: %q", got)
+	}
+}
+
+func TestRenderJSONIncludesSummary(t *testing.T) {
+	doc := transcript.Document{
+		Title:        "Video",
+		Summary:      "A short summary.",
+		SummaryModel: "qwen3-4b",
+	}
+	data, _, err := Render(doc, Options{Format: FormatJSON})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, `"summary": "A short summary."`) || !strings.Contains(got, `"summary_model": "qwen3-4b"`) {
+		t.Fatalf("json missing summary fields: %q", got)
+	}
+}
+
+func TestRenderJSONOmitsEmptySummary(t *testing.T) {
+	data, _, err := Render(transcript.Document{Title: "Video"}, Options{Format: FormatJSON})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	if strings.Contains(string(data), `"summary"`) {
+		t.Fatalf("json should omit empty summary: %q", string(data))
 	}
 }

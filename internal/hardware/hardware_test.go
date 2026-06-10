@@ -51,3 +51,21 @@ func TestDetectOnDarwin(t *testing.T) {
 		t.Fatalf("Detect() = %+v, expected chip and RAM on macOS", info)
 	}
 }
+
+func TestRecommendPairsModels(t *testing.T) {
+	cases := []struct {
+		ramGB   int
+		whisper string
+		summary string
+	}{
+		{8, "small", "qwen3-1.7b"},
+		{16, "medium", "qwen3-4b"},
+		{32, "large-v3-turbo", "qwen3-8b"},
+	}
+	for _, c := range cases {
+		got := Recommend(Info{RAMGB: c.ramGB})
+		if got.WhisperModel != c.whisper || got.SummaryModel != c.summary {
+			t.Fatalf("Recommend(%d GB) = %+v", c.ramGB, got)
+		}
+	}
+}
