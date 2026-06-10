@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/devosurf/cuescribe/internal/config"
+	"github.com/devosurf/cuescribe/internal/hardware"
 	"github.com/devosurf/cuescribe/internal/logging"
 	"github.com/devosurf/cuescribe/internal/model"
 	"github.com/devosurf/cuescribe/internal/output"
@@ -220,7 +221,7 @@ func newSetupCommand() *cobra.Command {
 		},
 	}
 	cmd.PersistentFlags().BoolVar(&yes, "yes", false, "install missing Homebrew dependencies without prompting")
-	cmd.PersistentFlags().StringVar(&modelName, "model", "small", "model to download")
+	cmd.PersistentFlags().StringVar(&modelName, "model", "", "model to download (default: recommended for detected hardware)")
 	cmd.PersistentFlags().BoolVar(&requireCookies, "require-cookies", false, "fail setup unless YouTube browser cookies are configured and usable")
 	cmd.PersistentFlags().StringVar(&cookiesBrowser, "cookies-browser", "", "browser name for YouTube cookies, such as safari, chrome, or firefox")
 	cmd.PersistentFlags().StringVar(&cookiesProfile, "cookies-profile", "", "browser profile name for YouTube cookies")
@@ -492,6 +493,10 @@ func runSetupModel(ctx context.Context, cmd *cobra.Command, modelName string) er
 	if err != nil {
 		return err
 	}
+	modelName, err = resolveSetupModel(cmd, modelName, hardware.Detect(), isInteractiveInput(cmd))
+	if err != nil {
+		return err
+	}
 	entry, ok := model.Get(modelName)
 	if !ok {
 		return fmt.Errorf("Error: unknown model %q.\nFix: use one of %s", modelName, strings.Join(model.Names(), ", "))
@@ -511,6 +516,31 @@ func runSetupModel(ctx context.Context, cmd *cobra.Command, modelName string) er
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "config saved: %s\n", paths.ConfigFile)
 	return nil
+}
+
+// resolveSetupModel picks the Whisper model to install: an explicit --model
+// wins; otherwise the hardware-based recommendation is used, which
+// interactive users can override at a prompt.
+func resolveSetupModel(cmd *cobra.Command, modelName string, hw hardware.Info, interactive bool) (string, error) {
+	if strings.TrimSpace(modelName) != "" {
+		return strings.TrimSpace(modelName), nil
+	}
+	recommended := hardware.RecommendedWhisperModel(hw)
+	if desc := hw.String(); desc != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "detected hardware: %s\n", desc)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "recommended model: %s\n", recommended)
+	if !interactive {
+		return recommended, nil
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "model [%s] (options: %s): ", recommended, strings.Join(model.Names(), ", "))
+	reader := bufio.NewReader(cmd.InOrStdin())
+	answer, _ := reader.ReadString('\n')
+	answer = strings.TrimSpace(answer)
+	if answer == "" {
+		return recommended, nil
+	}
+	return answer, nil
 }
 
 type cookieSetupOptions struct {

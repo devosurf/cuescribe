@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/devosurf/cuescribe/internal/config"
+	"github.com/devosurf/cuescribe/internal/hardware"
 )
 
 func TestPreferredBrowserUsesDetectedDefault(t *testing.T) {
@@ -617,5 +618,68 @@ func assertStrings(t *testing.T, got, want []string) {
 		if got[i] != want[i] {
 			t.Fatalf("got[%d] = %q, want %q: %v", i, got[i], want[i], got)
 		}
+	}
+}
+
+func TestResolveSetupModelExplicitNameWins(t *testing.T) {
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	got, err := resolveSetupModel(cmd, "tiny", hardware.Info{Chip: "Apple M2", RAMGB: 32}, true)
+	if err != nil {
+		t.Fatalf("resolveSetupModel() error = %v", err)
+	}
+	if got != "tiny" {
+		t.Fatalf("resolveSetupModel() = %q, want tiny", got)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("resolveSetupModel() printed %q for explicit model", out.String())
+	}
+}
+
+func TestResolveSetupModelNonInteractiveUsesRecommendation(t *testing.T) {
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	got, err := resolveSetupModel(cmd, "", hardware.Info{Chip: "Apple M1", RAMGB: 16}, false)
+	if err != nil {
+		t.Fatalf("resolveSetupModel() error = %v", err)
+	}
+	if got != "medium" {
+		t.Fatalf("resolveSetupModel() = %q, want medium", got)
+	}
+	if !strings.Contains(out.String(), "Apple M1, 16 GB RAM") {
+		t.Fatalf("output missing hardware line: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "recommended model: medium") {
+		t.Fatalf("output missing recommendation: %q", out.String())
+	}
+}
+
+func TestResolveSetupModelInteractiveAcceptsDefault(t *testing.T) {
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetIn(strings.NewReader("\n"))
+	got, err := resolveSetupModel(cmd, "", hardware.Info{Chip: "Apple M3 Max", RAMGB: 64}, true)
+	if err != nil {
+		t.Fatalf("resolveSetupModel() error = %v", err)
+	}
+	if got != "large-v3-turbo" {
+		t.Fatalf("resolveSetupModel() = %q, want large-v3-turbo", got)
+	}
+}
+
+func TestResolveSetupModelInteractiveOverride(t *testing.T) {
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetIn(strings.NewReader("base\n"))
+	got, err := resolveSetupModel(cmd, "", hardware.Info{RAMGB: 8}, true)
+	if err != nil {
+		t.Fatalf("resolveSetupModel() error = %v", err)
+	}
+	if got != "base" {
+		t.Fatalf("resolveSetupModel() = %q, want base", got)
 	}
 }
