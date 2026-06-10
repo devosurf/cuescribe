@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/devosurf/cuescribe/internal/download"
 	"github.com/devosurf/cuescribe/internal/progress"
@@ -129,6 +131,11 @@ func SHA256File(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// errInvalidPart marks a .part file that cannot lead to a valid model:
+// oversized, rejected by the server (416), or failing checksum after
+// completion. Download reacts by discarding it and retrying from scratch.
+var errInvalidPart = errors.New("partial download is invalid")
+
 func Download(ctx context.Context, entry Entry, dest string, out io.Writer) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
@@ -140,7 +147,58 @@ func Download(ctx context.Context, entry Entry, dest string, out io.Writer) erro
 		}
 	}
 	partPath := dest + ".part"
-	start := fileSize(partPath)
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		lastErr = downloadResumable(ctx, entry, dest, partPath, out)
+		if lastErr == nil {
+			fmt.Fprintf(out, "model installed: %s\n", dest)
+			return nil
+		}
+		if !errors.Is(lastErr, errInvalidPart) {
+			return lastErr
+		}
+		// Never leave an invalid .part behind: it would poison every
+		// future resume attempt.
+		if err := os.Remove(partPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if attempt == 0 {
+			fmt.Fprintln(out, "warn  partial download was invalid; restarting from scratch")
+		}
+	}
+	return lastErr
+}
+
+func downloadResumable(ctx context.Context, entry Entry, dest, partPath string, out io.Writer) error {
+	// Open and lock the .part before reading its size so concurrent
+	// cuescribe processes cannot interleave appends into the same file.
+	f, err := os.OpenFile(partPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return fmt.Errorf("Error: another download of model %s is already running.\nFix: wait for it to finish, then rerun", entry.Name)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	start := info.Size()
+	if entry.Size > 0 && start >= entry.Size {
+		// Cannot resume at or past the full size. Keep the file only if it
+		// is already the complete, verified model.
+		if start == entry.Size {
+			if err := VerifyFile(partPath, entry.SHA256); err == nil {
+				if err := f.Close(); err != nil {
+					return err
+				}
+				return os.Rename(partPath, dest)
+			}
+		}
+		return fmt.Errorf("partial download is %s but the model is %s: %w",
+			progress.HumanBytes(start), progress.HumanBytes(entry.Size), errInvalidPart)
+	}
 	ctx, guard := download.NewStallGuard(ctx, download.DefaultStallTimeout)
 	defer guard.Stop()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, entry.URL, nil)
@@ -158,22 +216,25 @@ func Download(ctx context.Context, entry Entry, dest string, out io.Writer) erro
 		return guard.Wrap(err)
 	}
 	defer resp.Body.Close()
-	appendMode := start > 0 && resp.StatusCode == http.StatusPartialContent
+	if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+		return fmt.Errorf("model download failed: %s: %w", resp.Status, errInvalidPart)
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		return fmt.Errorf("model download failed: %s", resp.Status)
 	}
-	if start > 0 && !appendMode {
-		start = 0
-	}
-	flag := os.O_CREATE | os.O_WRONLY
+	appendMode := start > 0 && resp.StatusCode == http.StatusPartialContent
 	if appendMode {
-		flag |= os.O_APPEND
+		if _, err := f.Seek(0, io.SeekEnd); err != nil {
+			return err
+		}
 	} else {
-		flag |= os.O_TRUNC
-	}
-	f, err := os.OpenFile(partPath, flag, 0o644)
-	if err != nil {
-		return err
+		if err := f.Truncate(0); err != nil {
+			return err
+		}
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		start = 0
 	}
 	fmt.Fprintf(out, "model: %s (%s)\n", entry.Name, progress.HumanBytes(entry.Size))
 	fmt.Fprintf(out, "destination: %s\n", dest)
@@ -183,7 +244,8 @@ func Download(ctx context.Context, entry Entry, dest string, out io.Writer) erro
 	bar := progress.NewBar(out, "Downloading model", entry.Size)
 	written, copyErr := download.Copy(f, guard.Reader(resp.Body), bar, start)
 	// Close before verifying and renaming so the file is fully flushed and
-	// no write handle is open when it moves into place.
+	// no write handle is open when it moves into place; this also releases
+	// the lock.
 	closeErr := f.Close()
 	if copyErr != nil {
 		return guard.Wrap(copyErr)
@@ -194,19 +256,7 @@ func Download(ctx context.Context, entry Entry, dest string, out io.Writer) erro
 	bar.Finish(fmt.Sprintf("downloaded %s", progress.HumanBytes(written)))
 	progress.Step(out, "Verifying checksum")
 	if err := VerifyFile(partPath, entry.SHA256); err != nil {
-		return err
+		return fmt.Errorf("%v: %w", err, errInvalidPart)
 	}
-	if err := os.Rename(partPath, dest); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "model installed: %s\n", dest)
-	return nil
-}
-
-func fileSize(path string) int64 {
-	info, err := os.Stat(path)
-	if err != nil {
-		return 0
-	}
-	return info.Size()
+	return os.Rename(partPath, dest)
 }
