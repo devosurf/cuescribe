@@ -88,6 +88,9 @@ func progressLabels(name string, args []string) (string, string) {
 		if containsArg(args, "--dump-json") {
 			return "Fetching media metadata", "Fetched media metadata"
 		}
+		if containsArg(args, "--write-subs") || containsArg(args, "--write-auto-subs") {
+			return "Downloading subtitles", "Downloaded subtitles"
+		}
 		return "Downloading media", "Downloaded media"
 	case "ffmpeg":
 		return "Normalizing audio", "Normalized audio"

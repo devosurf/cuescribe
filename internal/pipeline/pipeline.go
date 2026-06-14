@@ -4,12 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/devosurf/cuescribe/internal/audio"
 	"github.com/devosurf/cuescribe/internal/config"
@@ -43,14 +41,12 @@ type DocumentSummarizer interface {
 
 type Pipeline struct {
 	Runner     runner.CommandRunner
-	Client     *http.Client
 	Summarizer DocumentSummarizer
 }
 
 func New(r runner.CommandRunner) Pipeline {
 	return Pipeline{
 		Runner:     r,
-		Client:     &http.Client{Timeout: 60 * time.Second},
 		Summarizer: summary.Summarizer{},
 	}
 }
@@ -125,47 +121,45 @@ func (p Pipeline) transcribe(ctx context.Context, opts Options) (transcript.Docu
 }
 
 func (p Pipeline) fromSubtitles(ctx context.Context, opts Options, md ytdlp.Metadata, selection ytdlp.SubtitleSelection) (transcript.Document, error) {
-	progress.Step(opts.Progress, "Downloading subtitles")
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, selection.URL, nil)
-	if err != nil {
-		return transcript.Document{}, err
-	}
-	resp, err := p.Client.Do(req)
-	if err != nil {
-		return transcript.Document{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return transcript.Document{}, fmt.Errorf("subtitle download failed: %s", resp.Status)
-	}
-	progress.Step(opts.Progress, "Parsing subtitles")
-	var segments []transcript.Segment
-	switch selection.Ext {
-	case "srt":
-		segments, err = subtitles.ParseSRT(resp.Body)
-	default:
-		segments, err = subtitles.ParseVTT(resp.Body)
-	}
-	if err != nil {
-		return transcript.Document{}, err
-	}
-	mode := transcript.ModeSubtitlesManual
-	if selection.Kind == ytdlp.SubtitleAuto {
-		mode = transcript.ModeSubtitlesAuto
-	}
-	return transcript.Document{
-		SchemaVersion:    transcript.SchemaVersion,
-		Title:            md.Title,
-		Source:           ytdlp.SourceURL(md),
-		Uploader:         md.Uploader,
-		Duration:         ytdlp.Duration(md),
-		Language:         normalizeDefault(opts.Lang, "auto"),
-		DetectedLanguage: selection.Lang,
-		Mode:             mode,
-		Translated:       opts.Translate,
-		Chapters:         ytdlp.ToChapters(md.Chapters),
-		Segments:         segments,
-	}, nil
+	return withTempDir(opts.Paths.CacheDir, func(dir string) (transcript.Document, error) {
+		subtitlePath, err := ytdlp.DownloadSubtitle(ctx, p.Runner, opts.Input, dir, selection, ytdlp.CookiesForInput(opts.Input, opts.Config.Cookies))
+		if err != nil {
+			return transcript.Document{}, fmt.Errorf("subtitle download failed: %w", err)
+		}
+		file, err := os.Open(subtitlePath)
+		if err != nil {
+			return transcript.Document{}, err
+		}
+		defer file.Close()
+		progress.Step(opts.Progress, "Parsing subtitles")
+		var segments []transcript.Segment
+		switch strings.ToLower(filepath.Ext(subtitlePath)) {
+		case ".srt":
+			segments, err = subtitles.ParseSRT(file)
+		default:
+			segments, err = subtitles.ParseVTT(file)
+		}
+		if err != nil {
+			return transcript.Document{}, err
+		}
+		mode := transcript.ModeSubtitlesManual
+		if selection.Kind == ytdlp.SubtitleAuto {
+			mode = transcript.ModeSubtitlesAuto
+		}
+		return transcript.Document{
+			SchemaVersion:    transcript.SchemaVersion,
+			Title:            md.Title,
+			Source:           ytdlp.SourceURL(md),
+			Uploader:         md.Uploader,
+			Duration:         ytdlp.Duration(md),
+			Language:         normalizeDefault(opts.Lang, "auto"),
+			DetectedLanguage: selection.Lang,
+			Mode:             mode,
+			Translated:       opts.Translate,
+			Chapters:         ytdlp.ToChapters(md.Chapters),
+			Segments:         segments,
+		}, nil
+	})
 }
 
 func (p Pipeline) fromDownloadedAudio(ctx context.Context, opts Options, md ytdlp.Metadata) (transcript.Document, error) {

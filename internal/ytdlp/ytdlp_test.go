@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -48,6 +49,24 @@ func TestSelectSubtitleTranslatePrefersEnglishManual(t *testing.T) {
 	}
 }
 
+func TestSelectSubtitleAutoPrefersMetadataOriginalLanguage(t *testing.T) {
+	md := Metadata{
+		Language: "sv",
+		AutomaticCaptions: map[string][]SubtitleFormat{
+			"en":      {{Ext: "vtt", URL: "english"}},
+			"sv":      {{Ext: "vtt", URL: "swedish-translated"}},
+			"sv-orig": {{Ext: "vtt", URL: "swedish-original"}},
+		},
+	}
+	selection, ok := SelectSubtitle(md, "auto", "auto", false)
+	if !ok {
+		t.Fatal("SelectSubtitle() did not find subtitles")
+	}
+	if selection.Kind != SubtitleAuto || selection.Lang != "sv-orig" || selection.URL != "swedish-original" {
+		t.Fatalf("selection = %+v, want Swedish original auto captions", selection)
+	}
+}
+
 func TestSelectSubtitleFallsBackToSRT(t *testing.T) {
 	md := Metadata{
 		Subtitles: map[string][]SubtitleFormat{
@@ -63,6 +82,42 @@ func TestSelectSubtitleFallsBackToSRT(t *testing.T) {
 	}
 	if selection.Ext != "srt" || selection.URL != "srt" {
 		t.Fatalf("selection = %+v, want srt", selection)
+	}
+}
+
+func TestDownloadSubtitleRunsYTDLPSubtitleDownload(t *testing.T) {
+	var gotArgs []string
+	fr := runnerFunc(func(ctx context.Context, name string, args ...string) (runner.Result, error) {
+		if name != "yt-dlp" {
+			t.Fatalf("name = %q, want yt-dlp", name)
+		}
+		gotArgs = args
+		outTemplate := argAfter(args, "-o")
+		if outTemplate == "" {
+			t.Fatalf("args missing -o: %v", args)
+		}
+		path := strings.Replace(outTemplate, "%(ext)s", "sv-orig.vtt", 1)
+		if err := os.WriteFile(path, []byte("WEBVTT\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return runner.Result{}, nil
+	})
+	path, err := DownloadSubtitle(context.Background(), fr, "https://youtu.be/id", t.TempDir(), SubtitleSelection{
+		Kind: SubtitleAuto,
+		Lang: "sv-orig",
+		Ext:  "vtt",
+	}, config.CookieConfig{})
+	if err != nil {
+		t.Fatalf("DownloadSubtitle() error = %v", err)
+	}
+	got := strings.Join(gotArgs, " ")
+	for _, want := range []string{"--write-auto-subs", "--sub-langs sv-orig", "--sub-format vtt", "https://youtu.be/id"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("args = %q, missing %q", got, want)
+		}
+	}
+	if !strings.HasSuffix(path, "subtitle.sv-orig.vtt") {
+		t.Fatalf("path = %q", path)
 	}
 }
 
@@ -187,4 +242,13 @@ type runnerFunc func(ctx context.Context, name string, args ...string) (runner.R
 
 func (f runnerFunc) Run(ctx context.Context, name string, args ...string) (runner.Result, error) {
 	return f(ctx, name, args...)
+}
+
+func argAfter(args []string, value string) string {
+	for i, arg := range args {
+		if arg == value && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
 }

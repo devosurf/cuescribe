@@ -2,9 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,22 +21,32 @@ func (f fakeRunner) Run(ctx context.Context, name string, args ...string) (runne
 }
 
 func TestRunPrefersManualSubtitles(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<v Alice>Hello</v>\n")
-	}))
-	defer server.Close()
 	fr := fakeRunner(func(ctx context.Context, name string, args ...string) (runner.Result, error) {
-		if name != "yt-dlp" || !contains(args, "--dump-json") {
+		if name != "yt-dlp" {
 			t.Fatalf("unexpected command: %s %v", name, args)
 		}
-		return runner.Result{Stdout: []byte(fmt.Sprintf(`{
-			"title":"Video",
-			"uploader":"Uploader",
-			"duration":12,
-			"webpage_url":"https://youtu.be/id",
-			"subtitles":{"en":[{"ext":"vtt","url":%q}]},
-			"automatic_captions":{"en":[{"ext":"vtt","url":"http://example.invalid/auto.vtt"}]}
-		}`, server.URL))}, nil
+		if contains(args, "--dump-json") {
+			return runner.Result{Stdout: []byte(`{
+				"title":"Video",
+				"uploader":"Uploader",
+				"duration":12,
+				"webpage_url":"https://youtu.be/id",
+				"subtitles":{"en":[{"ext":"vtt","url":"https://example.test/manual.vtt"}]},
+				"automatic_captions":{"en":[{"ext":"vtt","url":"https://example.test/auto.vtt"}]}
+			}`)}, nil
+		}
+		if !contains(args, "--write-subs") || argAfter(args, "--sub-langs") != "en" {
+			t.Fatalf("unexpected subtitle command args: %v", args)
+		}
+		outTemplate := argAfter(args, "-o")
+		if outTemplate == "" {
+			t.Fatalf("subtitle args missing -o: %v", args)
+		}
+		subtitlePath := filepath.Join(filepath.Dir(outTemplate), "subtitle.en.vtt")
+		if err := os.WriteFile(subtitlePath, []byte("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<v Alice>Hello</v>\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return runner.Result{}, nil
 	})
 	paths := config.PathsForHome(t.TempDir())
 	doc, err := New(fr).Run(context.Background(), Options{

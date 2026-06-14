@@ -21,6 +21,7 @@ type Metadata struct {
 	Title             string                      `json:"title"`
 	Uploader          string                      `json:"uploader"`
 	Duration          float64                     `json:"duration"`
+	Language          string                      `json:"language"`
 	WebpageURL        string                      `json:"webpage_url"`
 	OriginalURL       string                      `json:"original_url"`
 	LiveStatus        string                      `json:"live_status"`
@@ -127,6 +128,47 @@ func DownloadMedia(ctx context.Context, r runner.CommandRunner, input, dir strin
 	return lines[len(lines)-1], nil
 }
 
+func DownloadSubtitle(ctx context.Context, r runner.CommandRunner, input, dir string, selection SubtitleSelection, cookies config.CookieConfig) (string, error) {
+	outTemplate := filepath.Join(dir, "subtitle.%(ext)s")
+	writeFlag := "--write-subs"
+	if selection.Kind == SubtitleAuto {
+		writeFlag = "--write-auto-subs"
+	}
+	ext := selection.Ext
+	if ext == "" {
+		ext = "vtt"
+	}
+	args := []string{
+		"--ignore-config",
+		"--skip-download",
+		"--no-playlist",
+		"--no-warnings",
+		writeFlag,
+		"--sub-langs", selection.Lang,
+		"--sub-format", ext,
+		"-o", outTemplate,
+	}
+	args = append(args, cookies.YTDLPCookieArgs()...)
+	args = append(args, input)
+	if _, err := r.Run(ctx, "yt-dlp", args...); err != nil {
+		return "", err
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "subtitle.*"))
+	if err != nil {
+		return "", err
+	}
+	sort.Strings(matches)
+	for _, match := range matches {
+		if strings.EqualFold(filepath.Ext(match), "."+ext) {
+			return match, nil
+		}
+	}
+	if len(matches) > 0 {
+		return matches[0], nil
+	}
+	return "", fmt.Errorf("yt-dlp did not write subtitle file for language %s", selection.Lang)
+}
+
 func CookiesForInput(input string, cookies config.CookieConfig) config.CookieConfig {
 	if !isYouTubeURL(input) {
 		cookies.Enabled = false
@@ -136,21 +178,21 @@ func CookiesForInput(input string, cookies config.CookieConfig) config.CookieCon
 
 func SelectSubtitle(md Metadata, lang, subs string, translate bool) (SubtitleSelection, bool) {
 	if translate {
-		if sel, ok := selectFromMap(md.Subtitles, SubtitleManual, "en"); ok {
+		if sel, ok := selectFromMap(md.Subtitles, SubtitleManual, languagePreferences(md, "en", SubtitleManual)); ok {
 			return sel, true
 		}
-		return selectFromMap(md.AutomaticCaptions, SubtitleAuto, "en")
+		return selectFromMap(md.AutomaticCaptions, SubtitleAuto, languagePreferences(md, "en", SubtitleAuto))
 	}
 	switch subs {
 	case "manual":
-		return selectFromMap(md.Subtitles, SubtitleManual, lang)
+		return selectFromMap(md.Subtitles, SubtitleManual, languagePreferences(md, lang, SubtitleManual))
 	case "auto":
-		return selectFromMap(md.AutomaticCaptions, SubtitleAuto, lang)
+		return selectFromMap(md.AutomaticCaptions, SubtitleAuto, languagePreferences(md, lang, SubtitleAuto))
 	default:
-		if sel, ok := selectFromMap(md.Subtitles, SubtitleManual, lang); ok {
+		if sel, ok := selectFromMap(md.Subtitles, SubtitleManual, languagePreferences(md, lang, SubtitleManual)); ok {
 			return sel, true
 		}
-		return selectFromMap(md.AutomaticCaptions, SubtitleAuto, lang)
+		return selectFromMap(md.AutomaticCaptions, SubtitleAuto, languagePreferences(md, lang, SubtitleAuto))
 	}
 }
 
@@ -182,11 +224,11 @@ func SourceURL(md Metadata) string {
 	return ""
 }
 
-func selectFromMap(options map[string][]SubtitleFormat, kind SubtitleKind, lang string) (SubtitleSelection, bool) {
+func selectFromMap(options map[string][]SubtitleFormat, kind SubtitleKind, preferences []string) (SubtitleSelection, bool) {
 	if len(options) == 0 {
 		return SubtitleSelection{}, false
 	}
-	for _, candidate := range langCandidates(options, lang) {
+	for _, candidate := range langCandidates(options, preferences) {
 		if format, ok := preferredFormat(options[candidate]); ok {
 			return SubtitleSelection{Kind: kind, Lang: candidate, Ext: strings.ToLower(format.Ext), URL: format.URL}, true
 		}
@@ -194,34 +236,80 @@ func selectFromMap(options map[string][]SubtitleFormat, kind SubtitleKind, lang 
 	return SubtitleSelection{}, false
 }
 
-func langCandidates(options map[string][]SubtitleFormat, lang string) []string {
+func languagePreferences(md Metadata, lang string, kind SubtitleKind) []string {
+	lang = strings.ToLower(strings.TrimSpace(lang))
 	if lang != "" && lang != "auto" {
+		if kind == SubtitleAuto {
+			return uniqueStrings([]string{lang + "-orig", lang})
+		}
+		return []string{lang}
+	}
+	metadataLang := strings.ToLower(strings.TrimSpace(md.Language))
+	preferences := []string{}
+	if metadataLang != "" {
+		if kind == SubtitleAuto {
+			preferences = append(preferences, metadataLang+"-orig")
+		}
+		preferences = append(preferences, metadataLang)
+	}
+	if kind == SubtitleAuto {
+		preferences = append(preferences, "-orig")
+	}
+	preferences = append(preferences, "en")
+	return uniqueStrings(preferences)
+}
+
+func langCandidates(options map[string][]SubtitleFormat, preferences []string) []string {
+	seen := map[string]bool{}
+	candidates := []string{}
+	for _, preference := range preferences {
+		preference = strings.ToLower(strings.TrimSpace(preference))
+		if preference == "" || preference == "auto" {
+			continue
+		}
 		var exact []string
 		var prefix []string
-		normalized := strings.ToLower(lang)
 		for key := range options {
 			lower := strings.ToLower(key)
-			if lower == normalized {
+			if lower == preference {
 				exact = append(exact, key)
-			} else if strings.HasPrefix(lower, normalized+"-") || strings.HasPrefix(normalized, lower+"-") {
+			} else if strings.HasPrefix(preference, "-") && strings.HasSuffix(lower, preference) {
+				prefix = append(prefix, key)
+			} else if strings.HasPrefix(lower, preference+"-") || strings.HasPrefix(preference, lower+"-") {
 				prefix = append(prefix, key)
 			}
 		}
 		sort.Strings(exact)
 		sort.Strings(prefix)
-		return append(exact, prefix...)
+		for _, candidate := range append(exact, prefix...) {
+			if !seen[candidate] {
+				seen[candidate] = true
+				candidates = append(candidates, candidate)
+			}
+		}
 	}
 	keys := make([]string, 0, len(options))
 	for key := range options {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if strings.HasPrefix(keys[i], "en") != strings.HasPrefix(keys[j], "en") {
-			return strings.HasPrefix(keys[i], "en")
+		if !seen[key] {
+			keys = append(keys, key)
 		}
-		return keys[i] < keys[j]
-	})
-	return keys
+	}
+	sort.Strings(keys)
+	return append(candidates, keys...)
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 func preferredFormat(formats []SubtitleFormat) (SubtitleFormat, bool) {
