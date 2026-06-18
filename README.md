@@ -26,6 +26,8 @@ curl -fsSL https://cuescribe.dev/install.sh | sh
 
 The installer downloads Cuescribe, installs required Homebrew dependencies when
 Homebrew is available, and downloads the recommended Whisper model.
+If Homebrew is missing, it stops before installing Cuescribe and prints the
+Homebrew install command to run first.
 
 Installer flags:
 

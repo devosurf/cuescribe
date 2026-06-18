@@ -386,7 +386,7 @@ func installDependencies(ctx context.Context, cmd *cobra.Command, yes bool, name
 		return nil
 	}
 	if !runner.LookPath("brew") {
-		return fmt.Errorf("Error: Homebrew is missing.\nFix: install Homebrew, then run brew install %s", strings.Join(brewPackages(missing), " "))
+		return fmt.Errorf("Error: Homebrew is required to install missing dependencies: %s.\nFix: install Homebrew:\n  /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"\nThen run:\n  cuescribe setup --yes", strings.Join(missing, ", "))
 	}
 	pkgs := brewPackages(missing)
 	if !yes {

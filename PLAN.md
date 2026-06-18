@@ -255,6 +255,9 @@ The shell installer should only:
 `cuescribe setup` owns dependency, model, and cookie setup. The website install
 command should produce a working install on machines with Homebrew by installing
 missing required formulas without an extra flag.
+If required tools are missing and Homebrew is not installed, the installer
+should stop before downloading the binary, print the Homebrew install command,
+and ask the user to rerun the website install command after Homebrew is ready.
 
 Homebrew dependencies:
 

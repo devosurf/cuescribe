@@ -70,6 +70,29 @@ if [ "$os" != "darwin" ] || [ "$arch" != "arm64" ]; then
 	exit 1
 fi
 
+missing_setup_deps=""
+if [ "$run_setup" -eq 1 ] && [ "$yes" -eq 1 ]; then
+	for dep in yt-dlp ffmpeg whisper-cli; do
+		if ! command -v "$dep" >/dev/null 2>&1; then
+			missing_setup_deps="${missing_setup_deps}${missing_setup_deps:+, }$dep"
+		fi
+	done
+	if [ -n "$missing_setup_deps" ] && ! command -v brew >/dev/null 2>&1; then
+		cat >&2 <<'EOF'
+Error: Cuescribe needs Homebrew to install required audio tools.
+
+Install Homebrew first:
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+Then run the Cuescribe installer again:
+  curl -fsSL https://cuescribe.dev/install.sh | sh
+
+EOF
+		echo "Missing tools: $missing_setup_deps" >&2
+		exit 1
+	fi
+fi
+
 if [ -z "$install_dir" ]; then
 	if [ -w /usr/local/bin ]; then
 		install_dir="/usr/local/bin"
