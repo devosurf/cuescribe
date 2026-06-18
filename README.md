@@ -24,10 +24,14 @@ The CLI shells out without a shell to `yt-dlp`, `ffmpeg`, `ffprobe`, and `whispe
 curl -fsSL https://cuescribe.dev/install.sh | sh
 ```
 
+The installer downloads Cuescribe, installs required Homebrew dependencies when
+Homebrew is available, and downloads the recommended Whisper model.
+
 Installer flags:
 
 ```sh
 --no-setup
+--no-dependency-install
 --yes
 --require-cookies
 --cookies-browser BROWSER

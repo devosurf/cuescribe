@@ -5,7 +5,7 @@ repo="devosurf/cuescribe"
 version="latest"
 install_dir=""
 run_setup=1
-yes=0
+yes=1
 require_cookies=0
 cookies_browser=""
 cookies_profile=""
@@ -14,6 +14,9 @@ while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--no-setup)
 			run_setup=0
+			;;
+		--no-dependency-install)
+			yes=0
 			;;
 		--yes)
 			yes=1
@@ -38,7 +41,7 @@ while [ "$#" -gt 0 ]; do
 			version="${1:-}"
 			;;
 		-h|--help)
-			echo "usage: install.sh [--no-setup] [--yes] [--require-cookies] [--cookies-browser BROWSER] [--cookies-profile PROFILE] [--install-dir DIR] [--version VERSION]"
+			echo "usage: install.sh [--no-setup] [--no-dependency-install] [--yes] [--require-cookies] [--cookies-browser BROWSER] [--cookies-profile PROFILE] [--install-dir DIR] [--version VERSION]"
 			exit 0
 			;;
 		*)

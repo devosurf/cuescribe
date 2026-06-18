@@ -250,9 +250,11 @@ The shell installer should only:
 3. Download the matching binary.
 4. Verify SHA-256.
 5. Install the binary.
-6. Run `cuescribe setup` by default.
+6. Run `cuescribe setup --yes` by default.
 
-`cuescribe setup` owns dependency, model, and cookie setup.
+`cuescribe setup` owns dependency, model, and cookie setup. The website install
+command should produce a working install on machines with Homebrew by installing
+missing required formulas without an extra flag.
 
 Homebrew dependencies:
 
@@ -266,6 +268,7 @@ Installer flags:
 
 ```sh
 --no-setup
+--no-dependency-install
 --yes
 --require-cookies
 --cookies-browser BROWSER
