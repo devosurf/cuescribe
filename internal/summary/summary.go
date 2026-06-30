@@ -98,7 +98,49 @@ func languageInstruction(doc transcript.Document, language string) string {
 	if lang == "" || strings.EqualFold(lang, "auto") {
 		return "Write the summary in the same language as the transcript."
 	}
-	return fmt.Sprintf("Write the summary in the language %q.", lang)
+	return fmt.Sprintf("Write the summary in %s.", displayLanguage(lang))
+}
+
+func displayLanguage(lang string) string {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(lang), "_", "-"))
+	normalized = strings.TrimSuffix(normalized, "-orig")
+	if i := strings.IndexByte(normalized, '-'); i >= 0 {
+		normalized = normalized[:i]
+	}
+	switch normalized {
+	case "en", "eng":
+		return "English"
+	case "sv", "swe":
+		return "Swedish"
+	case "fr", "fra", "fre":
+		return "French"
+	case "de", "deu", "ger":
+		return "German"
+	case "es", "spa":
+		return "Spanish"
+	case "it", "ita":
+		return "Italian"
+	case "pt", "por":
+		return "Portuguese"
+	case "da", "dan":
+		return "Danish"
+	case "nb", "no", "nor":
+		return "Norwegian"
+	case "fi", "fin":
+		return "Finnish"
+	case "nl", "nld", "dut":
+		return "Dutch"
+	case "pl", "pol":
+		return "Polish"
+	case "ja", "jpn":
+		return "Japanese"
+	case "ko", "kor":
+		return "Korean"
+	case "zh", "zho", "chi":
+		return "Chinese"
+	default:
+		return strconv.Quote(strings.TrimSpace(lang))
+	}
 }
 
 func singlePassPrompt(doc transcript.Document, language, text string) string {

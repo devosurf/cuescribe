@@ -62,7 +62,7 @@ func TestSummarizeSinglePass(t *testing.T) {
 	if !strings.Contains(prompt, "hej världen") || !strings.Contains(prompt, `"Test Video"`) {
 		t.Fatalf("prompt missing transcript or title: %q", prompt)
 	}
-	if !strings.Contains(prompt, `language "sv"`) {
+	if !strings.Contains(prompt, "Write the summary in Swedish.") {
 		t.Fatalf("prompt missing detected-language instruction: %q", prompt)
 	}
 }
@@ -73,8 +73,21 @@ func TestSummarizeLanguageOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Summarize() error = %v", err)
 	}
-	if !strings.Contains((*prompts)[0], `language "en"`) {
+	if !strings.Contains((*prompts)[0], "Write the summary in English.") {
 		t.Fatalf("prompt missing override language: %q", (*prompts)[0])
+	}
+}
+
+func TestSummarizeNormalizesYouTubeOriginalLanguageTag(t *testing.T) {
+	srv, prompts := stubServer(t, func(string, int) string { return "summary" })
+	doc := docWithText("Today we compare espresso machines.")
+	doc.DetectedLanguage = "en-orig"
+	_, err := Summarizer{BaseURL: srv.URL}.Summarize(context.Background(), Options{}, doc)
+	if err != nil {
+		t.Fatalf("Summarize() error = %v", err)
+	}
+	if !strings.Contains((*prompts)[0], "Write the summary in English.") {
+		t.Fatalf("prompt missing normalized language: %q", (*prompts)[0])
 	}
 }
 
