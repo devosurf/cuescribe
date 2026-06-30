@@ -715,6 +715,29 @@ func TestResolveSetupSummaryModelUsesRecommendation(t *testing.T) {
 	}
 }
 
+func TestConfigSummaryUpdatesConfiguredModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"config", "summary", "--model", "qwen3-4b"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	paths := config.PathsForHome(home)
+	cfg, err := config.Load(paths.ConfigFile, config.Default(paths))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Summary.Enabled || cfg.Summary.Model != "qwen3-4b" || cfg.Summary.Path != filepath.Join(paths.ModelDir, "Qwen3-4B-Instruct-2507-Q4_K_M.gguf") {
+		t.Fatalf("summary config = %+v", cfg.Summary)
+	}
+	if !strings.Contains(out.String(), "summary.model=qwen3-4b") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
 func TestBrewPackagesMapsLlamaServer(t *testing.T) {
 	got := brewPackages([]string{"llama-server", "whisper-cli", "yt-dlp"})
 	want := []string{"llama.cpp", "whisper-cpp", "yt-dlp"}

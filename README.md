@@ -81,7 +81,7 @@ Common flags:
 When `-o` is omitted, Cuescribe writes a title-based file in the current directory, for example `Video Title.md`. Use `-o -` to print to stdout.
 Use `--list-formats URL` to print yt-dlp's available formats for troubleshooting download errors.
 
-`--summarize` adds a fully local, multilingual summary to the output using a small LLM (Qwen3 via llama.cpp). The summary is written in the transcript's language unless `--summary-lang` says otherwise. Run `cuescribe setup summary` once to download a summary model — setup recommends one sized for the machine's RAM (8 GB: qwen3-1.7b, 16 GB: qwen3-4b, 32 GB+: qwen3-8b).
+`--summarize` adds a fully local, multilingual summary to the output using a small LLM (Qwen3 via llama.cpp). The summary is written in the transcript's language unless `--summary-lang` says otherwise. Run `cuescribe setup summary` once to download a summary model — setup recommends one sized for the machine's RAM (8 GB: qwen3-1.7b, 16 GB: qwen3-4b, 32 GB+: qwen3-8b). After setup, change it with `cuescribe config summary --model qwen3-4b` or point at a custom GGUF with `cuescribe config summary --model custom --path /path/to/model.gguf`.
 
 ## Setup And Admin
 
@@ -92,6 +92,7 @@ cuescribe setup model
 cuescribe setup summary
 cuescribe setup cookies --browser safari
 cuescribe setup cookies --browser chrome --profile "Profile 1"
+cuescribe config summary --model qwen3-4b
 cuescribe doctor
 cuescribe doctor --strict
 cuescribe doctor --fix

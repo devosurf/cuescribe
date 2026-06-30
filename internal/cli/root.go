@@ -818,6 +818,7 @@ func saveInstallState(cmd *cobra.Command) error {
 
 func newConfigCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "config", Short: "Inspect or update Cuescribe config"}
+
 	var modelName, modelPath string
 	modelCmd := &cobra.Command{
 		Use:   "model",
@@ -855,6 +856,57 @@ func newConfigCommand() *cobra.Command {
 	modelCmd.Flags().StringVar(&modelName, "name", "", "model name")
 	modelCmd.Flags().StringVar(&modelPath, "path", "", "custom model path")
 	cmd.AddCommand(modelCmd)
+
+	var summaryName, summaryPath string
+	var summaryEnable, summaryDisable bool
+	summaryCmd := &cobra.Command{
+		Use:   "summary",
+		Short: "Inspect or update summary model config",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			paths, err := config.ResolvePaths()
+			if err != nil {
+				return err
+			}
+			cfg, err := config.Load(paths.ConfigFile, config.Default(paths))
+			if err != nil {
+				return err
+			}
+			changed := false
+			if summaryDisable {
+				cfg.Summary = config.SummaryConfig{}
+				changed = true
+			}
+			if summaryEnable {
+				cfg.Summary.Enabled = true
+				changed = true
+			}
+			if summaryName != "" {
+				cfg.Summary.Enabled = true
+				cfg.Summary.Model = summaryName
+				if entry, ok := model.GetSummary(summaryName); ok && summaryPath == "" {
+					cfg.Summary.Path = filepath.Join(paths.ModelDir, entry.File)
+				}
+				changed = true
+			}
+			if summaryPath != "" {
+				cfg.Summary.Enabled = true
+				cfg.Summary.Path = summaryPath
+				changed = true
+			}
+			if changed {
+				if err := config.Save(paths.ConfigFile, cfg); err != nil {
+					return err
+				}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "summary.enabled=%t\nsummary.model=%s\nsummary.path=%s\n", cfg.Summary.Enabled, cfg.Summary.Model, cfg.Summary.Path)
+			return nil
+		},
+	}
+	summaryCmd.Flags().BoolVar(&summaryEnable, "enable", false, "enable summaries")
+	summaryCmd.Flags().BoolVar(&summaryDisable, "disable", false, "disable summaries")
+	summaryCmd.Flags().StringVar(&summaryName, "model", "", "summary model name")
+	summaryCmd.Flags().StringVar(&summaryPath, "path", "", "custom summary model path")
+	cmd.AddCommand(summaryCmd)
 
 	var browser, profile string
 	var enable, disable bool

@@ -194,6 +194,7 @@ cuescribe setup deps
 cuescribe setup model
 cuescribe setup cookies
 cuescribe config model
+cuescribe config summary
 cuescribe config cookies
 ```
 
@@ -215,6 +216,14 @@ Model picker:
 - `large-v3-turbo`
 
 Advanced model names, including quantized models, can be supported through flags/config. Custom model path is allowed.
+
+Summary model picker:
+
+- `qwen3-1.7b`
+- `qwen3-4b`
+- `qwen3-8b`
+
+`cuescribe config summary --model NAME` changes the summary model after setup and uses Cuescribe's managed model path for known Qwen models. `--path /path/to/model.gguf` supports custom local GGUF models.
 
 ## Cookies
 

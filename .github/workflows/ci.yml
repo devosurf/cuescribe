@@ -51,6 +51,11 @@ jobs:
               {"name":"small","url":"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin?download=true","sha256":"1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"},
               {"name":"medium","url":"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin?download=true","sha256":"6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208"},
               {"name":"large-v3-turbo","url":"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin?download=true","sha256":"1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69"}
+            ],
+            "summary_models": [
+              {"name":"qwen3-1.7b","url":"https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf?download=true","sha256":"b139949c5bd74937ad8ed8c8cf3d9ffb1e99c866c823204dc42c0d91fa181897"},
+              {"name":"qwen3-4b","url":"https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf?download=true","sha256":"3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597"},
+              {"name":"qwen3-8b","url":"https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf?download=true","sha256":"d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785"}
             ]
           }
           EOF
