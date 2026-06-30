@@ -48,6 +48,8 @@ type rootOptions struct {
 	listFormats    bool
 }
 
+var downloadModel = model.Download
+
 func Execute() {
 	if err := NewRootCommand().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -885,6 +887,11 @@ func newConfigCommand() *cobra.Command {
 				cfg.Summary.Model = summaryName
 				if entry, ok := model.GetSummary(summaryName); ok && summaryPath == "" {
 					cfg.Summary.Path = filepath.Join(paths.ModelDir, entry.File)
+					if !fileExists(cfg.Summary.Path) {
+						if err := downloadModel(cmd.Context(), entry, cfg.Summary.Path, cmd.OutOrStdout()); err != nil {
+							return err
+						}
+					}
 				}
 				changed = true
 			}

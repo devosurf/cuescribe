@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/devosurf/cuescribe/internal/config"
 	"github.com/devosurf/cuescribe/internal/hardware"
+	"github.com/devosurf/cuescribe/internal/model"
 )
 
 func TestPreferredBrowserUsesDetectedDefault(t *testing.T) {
@@ -718,6 +720,14 @@ func TestResolveSetupSummaryModelUsesRecommendation(t *testing.T) {
 func TestConfigSummaryUpdatesConfiguredModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	var downloadedPath string
+	origDownloadModel := downloadModel
+	downloadModel = func(ctx context.Context, entry model.Entry, dest string, out io.Writer) error {
+		downloadedPath = dest
+		return nil
+	}
+	t.Cleanup(func() { downloadModel = origDownloadModel })
+
 	cmd := NewRootCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
@@ -732,6 +742,9 @@ func TestConfigSummaryUpdatesConfiguredModel(t *testing.T) {
 	}
 	if !cfg.Summary.Enabled || cfg.Summary.Model != "qwen3-4b" || cfg.Summary.Path != filepath.Join(paths.ModelDir, "Qwen3-4B-Instruct-2507-Q4_K_M.gguf") {
 		t.Fatalf("summary config = %+v", cfg.Summary)
+	}
+	if downloadedPath != cfg.Summary.Path {
+		t.Fatalf("downloaded path = %q, want %q", downloadedPath, cfg.Summary.Path)
 	}
 	if !strings.Contains(out.String(), "summary.model=qwen3-4b") {
 		t.Fatalf("output = %q", out.String())

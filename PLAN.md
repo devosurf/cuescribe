@@ -223,7 +223,7 @@ Summary model picker:
 - `qwen3-4b`
 - `qwen3-8b`
 
-`cuescribe config summary --model NAME` changes the summary model after setup and uses Cuescribe's managed model path for known Qwen models. `--path /path/to/model.gguf` supports custom local GGUF models.
+`cuescribe config summary --model NAME` changes the summary model after setup, uses Cuescribe's managed model path for known Qwen models, and downloads the managed model if missing. `--path /path/to/model.gguf` supports custom local GGUF models.
 
 ## Cookies
 
