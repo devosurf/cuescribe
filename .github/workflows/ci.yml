@@ -18,6 +18,7 @@ jobs:
       - run: go test ./...
       - run: go vet ./...
       - run: sh -n install.sh
+      - run: sh scripts/test-install.sh
 
   build-darwin-arm64:
     runs-on: ubuntu-latest

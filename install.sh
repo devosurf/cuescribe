@@ -165,3 +165,34 @@ if [ "$run_setup" -eq 1 ]; then
 	fi
 	"$install_dir/cuescribe" "$@"
 fi
+
+path_command="$(command -v cuescribe 2>/dev/null || true)"
+usage_command="$install_dir/cuescribe"
+
+printf '\n'
+if [ "$path_command" = "$install_dir/cuescribe" ]; then
+	usage_command="cuescribe"
+elif [ "$install_dir" = "$HOME/.local/bin" ]; then
+	cat <<'EOF'
+Cuescribe was installed in ~/.local/bin, which is not in your current PATH.
+
+Add it for this terminal:
+  export PATH="$HOME/.local/bin:$PATH"
+
+Add it permanently for zsh:
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
+EOF
+else
+	cat <<EOF
+Cuescribe was installed outside your current PATH.
+Add this directory to PATH: $install_dir
+EOF
+fi
+
+cat <<EOF
+
+Cuescribe is ready. Try:
+  $usage_command "https://www.youtube.com/watch?v=jK-iJbM7Ow0"
+
+Keep URLs in quotes. In zsh, ? is a wildcard when unquoted.
+EOF

@@ -29,6 +29,9 @@ Homebrew is available, and downloads the recommended Whisper model.
 If Homebrew is missing, it stops before installing Cuescribe and prints the
 Homebrew install command to run first.
 
+After installation, the installer prints the exact command to run and any PATH
+step needed for the selected install directory.
+
 Installer flags:
 
 ```sh
@@ -60,6 +63,9 @@ cuescribe URL --summarize
 cuescribe URL --format json -o transcript.json
 cuescribe URL -o -
 ```
+
+Keep URLs in quotes. Shells such as zsh treat the `?` in YouTube watch URLs as
+a wildcard when it is unquoted.
 
 Common flags:
 
