@@ -144,7 +144,7 @@ func TestWriteUsesSanitizedTitleForDirectoryOutput(t *testing.T) {
 }
 
 func TestSanitizeFilenameSpacesAndSymbols(t *testing.T) {
-	path, err := resolvePath("", transcript.Document{Title: "  My  Cool Video: The  Final *Cut* "}, ".md")
+	path, err := resolvePath("", "  My  Cool Video: The  Final *Cut* ", ".md")
 	if err != nil {
 		t.Fatalf("resolvePath() error = %v", err)
 	}
@@ -199,5 +199,85 @@ func TestRenderJSONOmitsEmptySummary(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"summary"`) {
 		t.Fatalf("json should omit empty summary: %q", string(data))
+	}
+}
+
+func TestSaveFileProtectsAudioUnlessForced(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.opus")
+	dest := filepath.Join(dir, "saved.opus")
+	for path, data := range map[string]string{source: "new audio", dest: "original audio"} {
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := SaveFile(source, "Title", Options{OutputPath: dest}); err == nil {
+		t.Fatal("overwrote existing audio without force")
+	}
+	if got, err := os.ReadFile(dest); err != nil || string(got) != "original audio" {
+		t.Fatalf("existing audio = %q, error = %v", got, err)
+	}
+	if _, err := SaveFile(source, "Title", Options{OutputPath: dest, Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(dest); err != nil || string(got) != "new audio" {
+		t.Fatalf("replacement audio = %q, error = %v", got, err)
+	}
+	if _, err := SaveFile(source, "Title", Options{OutputPath: source, Force: true}); err == nil {
+		t.Fatal("allowed overwriting the source audio")
+	}
+	if got, err := os.ReadFile(source); err != nil || string(got) != "new audio" {
+		t.Fatalf("source audio = %q, error = %v", got, err)
+	}
+}
+
+func TestSaveFileKeepsActualAudioExtension(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.opus")
+	if err := os.WriteFile(source, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mislabeled := filepath.Join(dir, "wrong.mp3")
+	if _, err := SaveFile(source, "Title", Options{OutputPath: mislabeled}); err == nil {
+		t.Fatal("allowed labeling Opus audio as MP3")
+	}
+	if _, err := os.Stat(mislabeled); !os.IsNotExist(err) {
+		t.Fatalf("mislabeled output was created: %v", err)
+	}
+	path, err := SaveFile(source, "Title", Options{OutputPath: filepath.Join(dir, "listening")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(path) != "listening.opus" {
+		t.Fatalf("output path = %q", path)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "audio" {
+		t.Fatalf("saved audio = %q, error = %v", got, err)
+	}
+}
+
+func TestSaveFileCreatesAudioDirectoryOnlyWhenRequested(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "source.m4a")
+	if err := os.WriteFile(source, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "car") + string(filepath.Separator)
+	opts := Options{OutputPath: dir}
+	if _, err := SaveFile(source, "../Car Talk", opts); err == nil {
+		t.Fatal("created a missing directory without Mkdir")
+	}
+	opts.Mkdir = true
+	path, err := SaveFile(source, "../Car Talk", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != filepath.Join(dir, "Car_Talk.m4a") {
+		t.Fatalf("output path = %q", path)
+	}
+	if err := os.Remove(source); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "audio" {
+		t.Fatalf("audio after staging removal = %q, error = %v", got, err)
 	}
 }

@@ -158,6 +158,7 @@ func NewRootCommand() *cobra.Command {
 	cmd.PersistentFlags().BoolVar(&opts.debug, "cookie-debug", false, "deprecated: use --debug")
 	cmd.Flags().BoolVar(&opts.listFormats, "list-formats", false, "list yt-dlp formats for the input and exit")
 
+	cmd.AddCommand(newDownloadCommand())
 	cmd.AddCommand(newSetupCommand())
 	cmd.AddCommand(newConfigCommand())
 	cmd.AddCommand(newDoctorCommand())
@@ -312,7 +313,10 @@ func summaryConfigured(cfg config.Config) bool {
 }
 
 func ensureDependencies(ctx context.Context, cmd *cobra.Command, input string, listFormats, summarize bool) error {
-	deps := requiredDependenciesForInput(input, listFormats, summarize)
+	return ensureRequiredDependencies(ctx, cmd, requiredDependenciesForInput(input, listFormats, summarize))
+}
+
+func ensureRequiredDependencies(ctx context.Context, cmd *cobra.Command, deps []string) error {
 	missing := []string{}
 	for _, dep := range deps {
 		if !runner.LookPath(dep) {
@@ -1262,10 +1266,13 @@ func brewPackages(names []string) []string {
 	for _, name := range names {
 		switch name {
 		case "whisper-cli":
-			out = append(out, "whisper-cpp")
+			name = "whisper-cpp"
 		case "llama-server":
-			out = append(out, "llama.cpp")
-		default:
+			name = "llama.cpp"
+		case "ffprobe":
+			name = "ffmpeg"
+		}
+		if !containsString(out, name) {
 			out = append(out, name)
 		}
 	}

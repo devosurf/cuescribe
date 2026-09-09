@@ -1,6 +1,6 @@
 # Cuescribe
 
-Local Markdown and JSON transcripts for YouTube videos and media files.
+Local Markdown and JSON transcripts for YouTube videos and media files, plus audio-only downloads for listening.
 
 Homepage: https://cuescribe.dev
 Repository: https://github.com/devosurf/cuescribe
@@ -15,6 +15,7 @@ Cuescribe is a Go CLI for macOS Apple Silicon. It supports one input per run:
 - YouTube URLs with subtitle-first transcription.
 - Best-effort `yt-dlp` URLs.
 - Local media files through audio transcription.
+- Audio-only URL downloads without transcription or a Whisper model.
 
 The CLI shells out without a shell to `yt-dlp`, `ffmpeg`, `ffprobe`, and `whisper-cli`.
 
@@ -88,6 +89,48 @@ When `-o` is omitted, Cuescribe writes a title-based file in the current directo
 Use `--list-formats URL` to print yt-dlp's available formats for troubleshooting download errors.
 
 `--summarize` adds a fully local, multilingual summary to the output using a small LLM (Qwen3 via llama.cpp). The summary is written in the transcript's language unless `--summary-lang` says otherwise. Run `cuescribe setup summary` once to download a summary model — setup recommends one sized for the machine's RAM (8 GB: qwen3-1.7b, 16 GB: qwen3-4b, 32 GB+: qwen3-8b). After setup, change it with `cuescribe config summary --model qwen3-4b`; Cuescribe downloads managed Qwen models when missing. Point at a custom GGUF with `cuescribe config summary --model custom --path /path/to/model.gguf`.
+
+## Download Audio For Listening
+
+```sh
+# Best available audio, preserving the source codec where possible
+cuescribe download "https://youtube.com/watch?v=..."
+
+# High-quality MP3 for broad car stereo / player compatibility
+cuescribe download "https://youtube.com/watch?v=..." --audio-format mp3
+
+# AAC in an M4A file, or save MP3 into a directory
+cuescribe download "https://youtube.com/watch?v=..." --audio-format m4a -o lecture.m4a
+cuescribe download "https://youtube.com/watch?v=..." --audio-format mp3 -o car/ --mkdir
+```
+
+`download` selects the best available audio and extracts it with `yt-dlp` and
+`ffmpeg`. `--audio-format best` is the default: it avoids forced re-encoding and
+uses the resulting audio extension, such as `.opus` or `.m4a`. MP3 and M4A convert
+when needed using yt-dlp's highest VBR quality setting. Downloading never
+normalizes audio to speech-quality WAV, runs Whisper, or generates a transcript.
+It requires `yt-dlp`, `ffmpeg`, and `ffprobe`, but no transcription tools or models.
+`--source audio` on a normal transcript run still means audio **transcription**.
+
+Output defaults to a sanitized title-based filename in the current directory.
+Use `-o FILE_OR_DIR`, `--mkdir`, and `--force` as for transcripts. Existing audio
+files are not overwritten without `--force`. An explicit filename without an
+extension gets the actual audio extension; a mismatching extension is rejected.
+Use `--audio-format` to choose an encoding, not just a filename extension.
+Binary stdout (`-o -`), local-file conversion, playlists, and active livestreams
+are not supported by `download`.
+
+Configured browser cookies are automatically reused for YouTube metadata and
+downloads, never attached to other hosts by default. To configure them:
+
+```sh
+cuescribe setup cookies --browser chrome --profile "Profile 1"
+```
+
+An HTTP 403 does not by itself establish that cookies are required. If a download
+fails, use `cuescribe --list-formats "URL"` or add `--verbose` to the download
+command. Keep `yt-dlp` current; use `cuescribe doctor` to check configured cookie
+access.
 
 ## Setup And Admin
 

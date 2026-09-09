@@ -2,7 +2,7 @@
 
 ## Product
 
-Cuescribe is an open-source MIT CLI for local Markdown and JSON transcripts from YouTube URLs and local media files.
+Cuescribe is an open-source MIT CLI for local Markdown and JSON transcripts from YouTube URLs and local media files, with an audio-only URL download command for listening.
 
 Primary install:
 
@@ -18,6 +18,7 @@ cuescribe ./lecture.mp4 -o lecture.md
 cuescribe URL --source audio
 cuescribe URL --translate
 cuescribe --list-formats URL
+cuescribe download URL --audio-format mp3
 ```
 
 ## V1 Scope
@@ -75,6 +76,33 @@ Troubleshooting:
 ```
 
 `--list-formats URL` prints yt-dlp's available formats for the input and exits.
+
+## Audio Downloads
+
+```sh
+cuescribe download URL
+cuescribe download URL --audio-format best|mp3|m4a
+cuescribe download URL --audio-format mp3 -o car/ --mkdir
+```
+
+- Download one remote input for listening without transcription or summarization.
+- Select `bestaudio/best` and extract audio using yt-dlp and ffmpeg.
+- Default `best` preserves the source codec where possible; no 16 kHz mono
+  normalization. `mp3` and `m4a` convert when needed with audio quality `0`
+  (yt-dlp's highest VBR quality).
+- Require only `yt-dlp`, `ffmpeg`, and `ffprobe`; no Whisper or summary models.
+- Reuse configured browser/profile cookies on YouTube metadata and download
+  calls. Do not attach them to other hosts by default.
+- Reject local inputs, playlists, and active/upcoming livestreams.
+- Use the final postprocessed audio extension and existing title sanitization.
+  Default output is a title-based file in the current directory.
+- Support `-o FILE_OR_DIR`, `--mkdir`, `--force`, `--verbose`, and `--debug`.
+  Reject binary stdout (`-o -`). Append the actual extension to extensionless
+  explicit filenames and reject mismatching extensions rather than mislabeling
+  audio. Refuse existing audio files unless `--force` is passed.
+- Stage downloads in cache, publish the audio only after successful extraction,
+  and remove temporary downloads on success or failure.
+- Keep the transcript command's `--source audio` behavior unchanged.
 
 ## Output
 

@@ -94,6 +94,20 @@ func ListFormats(ctx context.Context, r runner.CommandRunner, input string, cook
 }
 
 func DownloadMedia(ctx context.Context, r runner.CommandRunner, input, dir string, cookies config.CookieConfig) (string, error) {
+	return downloadMedia(ctx, r, input, dir, "", cookies)
+}
+
+// DownloadAudio extracts listening-quality audio without speech normalization.
+func DownloadAudio(ctx context.Context, r runner.CommandRunner, input, dir, format string, cookies config.CookieConfig) (string, error) {
+	switch format {
+	case "best", "mp3", "m4a":
+	default:
+		return "", fmt.Errorf("unsupported audio format %q: use best, mp3, or m4a", format)
+	}
+	return downloadMedia(ctx, r, input, dir, format, cookies)
+}
+
+func downloadMedia(ctx context.Context, r runner.CommandRunner, input, dir, format string, cookies config.CookieConfig) (string, error) {
 	outTemplate := filepath.Join(dir, "source.%(ext)s")
 	args := []string{
 		"--ignore-config",
@@ -102,6 +116,9 @@ func DownloadMedia(ctx context.Context, r runner.CommandRunner, input, dir strin
 		"-f", "bestaudio/best",
 		"-o", outTemplate,
 		"--print", "after_move:filepath",
+	}
+	if format != "" {
+		args = append(args, "--extract-audio", "--audio-format", format, "--audio-quality", "0")
 	}
 	args = append(args, cookies.YTDLPCookieArgs()...)
 	args = append(args, input)

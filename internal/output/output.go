@@ -41,20 +41,12 @@ func Write(doc transcript.Document, opts Options, stdout io.Writer) (string, err
 		_, err := stdout.Write(data)
 		return "", err
 	}
-	path, err := resolvePath(opts.OutputPath, doc, ext)
+	path, err := resolvePath(opts.OutputPath, doc.Title, ext)
 	if err != nil {
 		return "", err
 	}
-	if opts.Mkdir {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return "", err
-		}
-	}
-	f, path, err := openOutputFile(path, ext, opts.Force)
+	f, path, err := createOutputFile(path, ext, opts)
 	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return "", fmt.Errorf("Error: output file already exists: %s\nFix: pass --force or choose a different -o path", path)
-		}
 		return "", err
 	}
 	defer f.Close()
@@ -62,6 +54,66 @@ func Write(doc transcript.Document, opts Options, stdout io.Writer) (string, err
 		return "", err
 	}
 	return path, nil
+}
+
+// SaveFile saves a completed media download using the same destination policy
+// as transcripts, without buffering the media in memory.
+func SaveFile(sourcePath, title string, opts Options) (string, error) {
+	if opts.OutputPath == "-" {
+		return "", fmt.Errorf("Error: audio downloads cannot be written to stdout.\nFix: choose an output file or directory with -o")
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		return "", err
+	}
+	defer source.Close()
+	info, err := source.Stat()
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("downloaded audio is not a regular file: %s", sourcePath)
+	}
+	ext := filepath.Ext(sourcePath)
+	if ext == "" {
+		return "", fmt.Errorf("downloaded audio has no file extension: %s", sourcePath)
+	}
+	path, err := resolvePath(opts.OutputPath, title, ext)
+	if err != nil {
+		return "", err
+	}
+	if destExt := filepath.Ext(path); destExt == "" {
+		path += ext
+	} else if !strings.EqualFold(destExt, ext) {
+		return "", fmt.Errorf("Error: output extension %q does not match downloaded audio %q.\nFix: use a matching extension, an output directory, or --audio-format mp3|m4a to select the encoding", destExt, ext)
+	}
+	if destInfo, err := os.Stat(path); err == nil && os.SameFile(info, destInfo) {
+		return "", fmt.Errorf("audio source and output are the same file: %s", path)
+	}
+	dest, path, err := createOutputFile(path, ext, opts)
+	if err != nil {
+		return "", err
+	}
+	_, copyErr := io.Copy(dest, source)
+	closeErr := dest.Close()
+	if err := errors.Join(copyErr, closeErr); err != nil {
+		os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+func createOutputFile(path, ext string, opts Options) (*os.File, string, error) {
+	if opts.Mkdir {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, path, err
+		}
+	}
+	f, path, err := openOutputFile(path, ext, opts.Force)
+	if errors.Is(err, os.ErrExist) {
+		return nil, path, fmt.Errorf("Error: output file already exists: %s\nFix: pass --force or choose a different -o path", path)
+	}
+	return f, path, err
 }
 
 func openOutputFile(path, ext string, force bool) (*os.File, string, error) {
@@ -255,16 +307,16 @@ func timestampURL(source string, d time.Duration) string {
 	return fmt.Sprintf("%s%st=%d", source, sep, int64(d/time.Second))
 }
 
-func resolvePath(outputPath string, doc transcript.Document, ext string) (string, error) {
+func resolvePath(outputPath, title, ext string) (string, error) {
 	if outputPath == "" {
-		return sanitizeFilename(doc.Title) + ext, nil
+		return sanitizeFilename(title) + ext, nil
 	}
 	if strings.HasSuffix(outputPath, string(filepath.Separator)) {
-		return filepath.Join(outputPath, sanitizeFilename(doc.Title)+ext), nil
+		return filepath.Join(outputPath, sanitizeFilename(title)+ext), nil
 	}
 	info, err := os.Stat(outputPath)
 	if err == nil && info.IsDir() {
-		return filepath.Join(outputPath, sanitizeFilename(doc.Title)+ext), nil
+		return filepath.Join(outputPath, sanitizeFilename(title)+ext), nil
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", err
