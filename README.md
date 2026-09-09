@@ -102,15 +102,44 @@ cuescribe download "https://youtube.com/watch?v=..." --audio-format mp3
 # AAC in an M4A file, or save MP3 into a directory
 cuescribe download "https://youtube.com/watch?v=..." --audio-format m4a -o lecture.m4a
 cuescribe download "https://youtube.com/watch?v=..." --audio-format mp3 -o car/ --mkdir
+
+# Use the channel avatar rather than the video thumbnail
+cuescribe download "https://youtube.com/watch?v=..." --audio-format m4a --cover channel
+
+# Text tags only, without cover artwork
+cuescribe download "https://youtube.com/watch?v=..." --audio-format mp3 --cover none
 ```
 
 `download` selects the best available audio and extracts it with `yt-dlp` and
 `ffmpeg`. `--audio-format best` is the default: it avoids forced re-encoding and
-uses the resulting audio extension, such as `.opus` or `.m4a`. MP3 and M4A convert
-when needed using yt-dlp's highest VBR quality setting. Downloading never
-normalizes audio to speech-quality WAV, runs Whisper, or generates a transcript.
+uses the resulting audio extension, such as `.opus` or `.m4a`. **Best is not an
+Apple Music compatibility guarantee**; choose `m4a` (AAC) or `mp3` for Apple Music
+and Doppler. Explicit M4A prefers an available native AAC/M4A stream to avoid
+lossy Opus-to-AAC conversion; otherwise MP3/M4A convert when needed using
+yt-dlp's highest VBR quality setting. Downloading never normalizes audio to
+speech-quality WAV, runs Whisper, or generates a transcript.
 It requires `yt-dlp`, `ffmpeg`, and `ffprobe`, but no transcription tools or models.
 `--source audio` on a normal transcript run still means audio **transcription**.
+
+Text tags are automatic and embedded in the audio file:
+
+- **Title:** the full video title, including Unicode and punctuation, independent
+  of filename sanitization.
+- **Artist and album artist:** the channel display name, falling back to uploader
+  when channel metadata is absent—not a detected performer or channel handle.
+- **Album:** the full video title. Each clip is treated as a single-track album
+  with its own artwork, rather than grouping all clips into a channel album.
+  There is no album override flag.
+- **Comment/source:** the original video URL.
+
+`--cover thumbnail|channel|none` defaults to the video thumbnail. `channel` makes
+an additional channel lookup and uses the avatar, never the banner. Artwork is
+converted to PNG without cropping or changing its aspect ratio and embedded
+in the audio, so it survives temporary-file cleanup. `none` keeps text tags and
+omits artwork, including artwork inherited from the source. MP3, M4A, Opus, Ogg,
+and FLAC support embedded covers; other source formats retain audio with a warning.
+Missing, unavailable, or invalid artwork also warns without discarding tagged
+audio. Metadata-writing failures stop the download before publishing output.
 
 Output defaults to a sanitized title-based filename in the current directory.
 Use `-o FILE_OR_DIR`, `--mkdir`, and `--force` as for transcripts. Existing audio
@@ -120,8 +149,9 @@ Use `--audio-format` to choose an encoding, not just a filename extension.
 Binary stdout (`-o -`), local-file conversion, playlists, and active livestreams
 are not supported by `download`.
 
-Configured browser cookies are automatically reused for YouTube metadata and
-downloads, never attached to other hosts by default. To configure them:
+Configured browser cookies are automatically reused for YouTube metadata,
+downloads, and channel lookups, never attached to other hosts by default.
+Artwork image requests do not receive browser cookies. To configure cookies:
 
 ```sh
 cuescribe setup cookies --browser chrome --profile "Profile 1"

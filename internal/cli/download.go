@@ -17,21 +17,32 @@ import (
 )
 
 func newDownloadCommand() *cobra.Command {
-	var format string
+	var format, cover string
 	var opts output.Options
 	var verbose bool
 	cmd := &cobra.Command{
-		Use:     "download URL",
-		Short:   "Download audio for listening without transcribing",
-		Long:    "Download the best available audio using configured YouTube cookies.\nBy default, preserve the source audio codec where possible. Use --audio-format mp3\nfor broad player compatibility, or m4a for AAC audio. No Whisper model is needed.",
-		Example: "  cuescribe download \"https://youtube.com/watch?v=...\"\n  cuescribe download \"https://youtube.com/watch?v=...\" --audio-format mp3 -o car/ --mkdir",
-		Args:    cobra.ExactArgs(1),
+		Use:   "download URL",
+		Short: "Download audio for listening without transcribing",
+		Long: "Download tagged audio using configured YouTube cookies; no Whisper model needed.\n" +
+			"Title and album use the full video title. Artist and album artist use the channel\n" +
+			"display name (uploader fallback); the original URL is stored in comment/source tags.\n" +
+			"Embed the video thumbnail by default, or choose a channel avatar or no artwork.\n" +
+			"Missing artwork warns and keeps tagged audio; metadata-writing errors fail.\n" +
+			"Best preserves the source codec and may yield Opus, not Apple Music-compatible audio.\n" +
+			"Use mp3 or m4a for Apple Music/Doppler; m4a prefers native AAC when available.",
+		Example: "  cuescribe download \"https://youtube.com/watch?v=...\" --audio-format m4a\n" +
+			"  cuescribe download \"https://youtube.com/watch?v=...\" --audio-format m4a --cover channel\n" +
+			"  cuescribe download \"https://youtube.com/watch?v=...\" --audio-format mp3 --cover none -o car/ --mkdir",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			input := args[0]
 			if !pipeline.IsURL(input) {
 				return fmt.Errorf("Error: download requires an HTTP or HTTPS URL.\nFix: run cuescribe download URL")
 			}
 			if err := oneOf("--audio-format", format, "best", "mp3", "m4a"); err != nil {
+				return err
+			}
+			if err := oneOf("--cover", cover, "thumbnail", "channel", "none"); err != nil {
 				return err
 			}
 			if opts.OutputPath == "-" {
@@ -88,6 +99,12 @@ func newDownloadCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := ytdlp.EmbedCover(cmd.Context(), r, source, md, cover, cookies); err != nil {
+				if cmd.Context().Err() != nil {
+					return cmd.Context().Err()
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "warn  artwork not embedded: %v\n", err)
+			}
 			progress.Step(cmd.ErrOrStderr(), "Saving audio")
 			written, err := output.SaveFile(source, md.Title, opts)
 			if err != nil {
@@ -98,6 +115,7 @@ func newDownloadCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&format, "audio-format", "best", "audio format: best (source codec), mp3, or m4a")
+	cmd.Flags().StringVar(&cover, "cover", "thumbnail", "embedded artwork: thumbnail, channel (avatar), or none")
 	cmd.Flags().StringVarP(&opts.OutputPath, "output", "o", "", "output file or directory (default: title and audio extension)")
 	cmd.Flags().BoolVar(&opts.Mkdir, "mkdir", false, "create output directories")
 	cmd.Flags().BoolVar(&opts.Force, "force", false, "overwrite an existing output file")

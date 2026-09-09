@@ -45,23 +45,48 @@ func TestDownloadUsesCookiesOnlyForYouTubeWithoutTranscriptionTools(t *testing.T
 }
 
 func TestFailedDownloadPreservesExistingOutputAndRemovesPartialMedia(t *testing.T) {
+	for _, failure := range []string{"FAIL_DOWNLOAD", "FAIL_TAGGING"} {
+		t.Run(failure, func(t *testing.T) {
+			paths := setupAudioDownload(t)
+			t.Setenv("EXPECTED_COOKIES", "chrome:Profile 1")
+			t.Setenv(failure, "1")
+			out := filepath.Join(t.TempDir(), "existing.opus")
+			if err := os.WriteFile(out, []byte("original audio"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cmd := NewRootCommand()
+			var stderr bytes.Buffer
+			cmd.SetErr(&stderr)
+			cmd.SetArgs([]string{"download", "https://youtu.be/example", "-o", out, "--force"})
+			if err := cmd.Execute(); err == nil {
+				t.Fatal("failed download reported success")
+			}
+			got, err := os.ReadFile(out)
+			if err != nil || string(got) != "original audio" {
+				t.Fatalf("existing audio = %q, error = %v", got, err)
+			}
+			assertDownloadStagingRemoved(t, paths.CacheDir)
+		})
+	}
+}
+
+func TestDownloadWarnsWhenArtworkIsMissingButKeepsAudio(t *testing.T) {
 	paths := setupAudioDownload(t)
 	t.Setenv("EXPECTED_COOKIES", "chrome:Profile 1")
-	t.Setenv("FAIL_DOWNLOAD", "1")
-	out := filepath.Join(t.TempDir(), "existing.opus")
-	if err := os.WriteFile(out, []byte("original audio"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	out := filepath.Join(t.TempDir(), "audio.opus")
 	cmd := NewRootCommand()
 	var stderr bytes.Buffer
 	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"download", "https://youtu.be/example", "-o", out, "--force"})
-	if err := cmd.Execute(); err == nil {
-		t.Fatal("failed download reported success")
+	cmd.SetArgs([]string{"download", "https://youtu.be/example", "-o", out})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("download: %v; stderr: %s", err, &stderr)
+	}
+	if !strings.Contains(stderr.String(), "warn") || !strings.Contains(stderr.String(), "artwork") {
+		t.Fatalf("missing artwork was not reported: %s", &stderr)
 	}
 	got, err := os.ReadFile(out)
-	if err != nil || string(got) != "original audio" {
-		t.Fatalf("existing audio = %q, error = %v", got, err)
+	if err != nil || string(got) != "audio payload" {
+		t.Fatalf("saved audio = %q, error = %v", got, err)
 	}
 	assertDownloadStagingRemoved(t, paths.CacheDir)
 }
@@ -73,6 +98,7 @@ func setupAudioDownload(t *testing.T) config.Paths {
 	}
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("FAIL_DOWNLOAD", "")
+	t.Setenv("FAIL_TAGGING", "")
 	paths := config.PathsForHome(os.Getenv("HOME"))
 	cfg := config.Default(paths)
 	cfg.Cookies = config.CookieConfig{Enabled: true, Browser: "chrome", Profile: "Profile 1"}
@@ -92,11 +118,13 @@ if [ "$1" = "--version" ]; then
 fi
 cookies=
 metadata=
+tagging=no
 out=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --cookies-from-browser) shift; cookies="$1" ;;
     --dump-json) metadata=yes ;;
+    --embed-metadata) tagging=yes ;;
     -o) shift; out="$1" ;;
   esac
   shift
@@ -113,6 +141,10 @@ out="${out%.*}.opus"
 printf 'audio payload' > "$out"
 if [ "$FAIL_DOWNLOAD" = 1 ]; then
   printf 'HTTP Error 403: Forbidden\n' >&2
+  exit 1
+fi
+if [ "$FAIL_TAGGING" = 1 ] && [ "$tagging" = yes ]; then
+  printf 'metadata postprocessing failed: cannot write tags\n' >&2
   exit 1
 fi
 printf '%s\n' "$out"

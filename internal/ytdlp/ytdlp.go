@@ -20,6 +20,9 @@ type Metadata struct {
 	ID                string                      `json:"id"`
 	Title             string                      `json:"title"`
 	Uploader          string                      `json:"uploader"`
+	ChannelURL        string                      `json:"channel_url"`
+	Thumbnail         string                      `json:"thumbnail"`
+	Thumbnails        []Thumbnail                 `json:"thumbnails"`
 	Duration          float64                     `json:"duration"`
 	Language          string                      `json:"language"`
 	WebpageURL        string                      `json:"webpage_url"`
@@ -97,7 +100,7 @@ func DownloadMedia(ctx context.Context, r runner.CommandRunner, input, dir strin
 	return downloadMedia(ctx, r, input, dir, "", cookies)
 }
 
-// DownloadAudio extracts listening-quality audio without speech normalization.
+// DownloadAudio extracts and tags listening-quality audio without speech normalization.
 func DownloadAudio(ctx context.Context, r runner.CommandRunner, input, dir, format string, cookies config.CookieConfig) (string, error) {
 	switch format {
 	case "best", "mp3", "m4a":
@@ -109,16 +112,33 @@ func DownloadAudio(ctx context.Context, r runner.CommandRunner, input, dir, form
 
 func downloadMedia(ctx context.Context, r runner.CommandRunner, input, dir, format string, cookies config.CookieConfig) (string, error) {
 	outTemplate := filepath.Join(dir, "source.%(ext)s")
+	selector := "bestaudio/best"
+	if format == "m4a" {
+		selector = "bestaudio[ext=m4a][acodec^=mp4a]/bestaudio[ext=m4a][acodec=aac]/bestaudio/best"
+	}
 	args := []string{
 		"--ignore-config",
 		"--no-playlist",
 		"--no-warnings",
-		"-f", "bestaudio/best",
+		"-f", selector,
 		"-o", outTemplate,
 		"--print", "after_move:filepath",
 	}
 	if format != "" {
 		args = append(args, "--extract-audio", "--audio-format", format, "--audio-quality", "0")
+		// meta_* overrides yt-dlp's detected track/performer/album fields.
+		// Explicit regexes preserve newlines and allow an absent artist to be empty.
+		args = append(args, "--embed-metadata",
+			"--parse-metadata", "%(title)s:(?s)(?P<meta_title>.*)",
+			"--parse-metadata", "%(channel,uploader|)s:(?s)(?P<meta_artist>.*)",
+			"--parse-metadata", "%(channel,uploader|)s:(?s)(?P<meta_album_artist>.*)",
+			"--parse-metadata", "%(title)s:(?s)(?P<meta_album>.*)",
+			"--parse-metadata", "%(original_url,webpage_url|)s:(?s)(?P<meta_comment>.*)",
+			"--parse-metadata", "%(original_url,webpage_url|)s:(?s)(?P<meta_purl>.*)",
+			// Start without inherited artwork, including Ogg picture comments.
+			// The optional cover step attaches only the explicitly selected image.
+			"--postprocessor-args", "Metadata+ffmpeg_o:-vn -metadata METADATA_BLOCK_PICTURE= -metadata:s:a METADATA_BLOCK_PICTURE= -metadata coverart= -metadata:s:a coverart= -metadata coverartmime= -metadata:s:a coverartmime=",
+		)
 	}
 	args = append(args, cookies.YTDLPCookieArgs()...)
 	args = append(args, input)

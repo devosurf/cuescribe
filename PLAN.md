@@ -83,16 +83,37 @@ Troubleshooting:
 cuescribe download URL
 cuescribe download URL --audio-format best|mp3|m4a
 cuescribe download URL --audio-format mp3 -o car/ --mkdir
+cuescribe download URL --audio-format m4a --cover channel
+cuescribe download URL --audio-format mp3 --cover none
 ```
 
 - Download one remote input for listening without transcription or summarization.
-- Select `bestaudio/best` and extract audio using yt-dlp and ffmpeg.
+- Select `bestaudio/best` and extract audio using yt-dlp and ffmpeg. For explicit
+  M4A, prefer native AAC/M4A when available before falling back to best audio.
 - Default `best` preserves the source codec where possible; no 16 kHz mono
   normalization. `mp3` and `m4a` convert when needed with audio quality `0`
   (yt-dlp's highest VBR quality).
+  `best` can yield Opus and is not an Apple Music compatibility guarantee;
+  recommend M4A/AAC or MP3 for Apple Music and Doppler.
+- Automatically embed text metadata in the audio, not just filenames or sidecars.
+  Title and album are the exact full video title, preserving Unicode and
+  punctuation. Artist and album artist are the channel display name, falling
+  back to uploader—not detected performers or handles when a display name exists.
+  Retain the original video URL in comment/source tags.
+- Treat each clip as a single-track album with its own artwork; do not group
+  all clips into a channel album. No album override flag.
+- Support `--cover thumbnail|channel|none`, defaulting to `thumbnail`. Channel
+  artwork uses an additional bounded channel lookup for the avatar, never the
+  banner. Convert artwork to PNG without cropping or changing aspect ratio.
+  Embed covers in MP3/M4A and supported best formats (Opus/Ogg/FLAC).
+  `none` omits artwork, including any inherited cover, while retaining text tags.
+- Missing/unavailable/invalid or unsupported artwork warns and preserves tagged
+  audio. A text-metadata-writing failure is fatal. Artwork attachment uses
+  stream-copy and a separate staged output so a failure cannot damage tagged audio.
 - Require only `yt-dlp`, `ffmpeg`, and `ffprobe`; no Whisper or summary models.
-- Reuse configured browser/profile cookies on YouTube metadata and download
-  calls. Do not attach them to other hosts by default.
+- Reuse configured browser/profile cookies on YouTube metadata, download,
+  and channel lookup calls. Re-scope consent for the lookup host; never attach
+  browser cookies to artwork image requests or other hosts by default.
 - Reject local inputs, playlists, and active/upcoming livestreams.
 - Use the final postprocessed audio extension and existing title sanitization.
   Default output is a title-based file in the current directory.
@@ -100,8 +121,8 @@ cuescribe download URL --audio-format mp3 -o car/ --mkdir
   Reject binary stdout (`-o -`). Append the actual extension to extensionless
   explicit filenames and reject mismatching extensions rather than mislabeling
   audio. Refuse existing audio files unless `--force` is passed.
-- Stage downloads in cache, publish the audio only after successful extraction,
-  and remove temporary downloads on success or failure.
+- Stage downloads and artwork in cache, publish audio only after successful
+  extraction and text tagging, and remove temporary files on success or failure.
 - Keep the transcript command's `--source audio` behavior unchanged.
 
 ## Output

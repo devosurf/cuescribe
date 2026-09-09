@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -236,6 +237,94 @@ func TestListFormatsRunsYTDLPListFormats(t *testing.T) {
 	if out != "format list\n" {
 		t.Fatalf("out = %q", out)
 	}
+}
+
+func TestDownloadAudioOverridesDetectedMusicWithVideoMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name, format, channel, artist string
+	}{
+		{"channel display name", "mp3", "Café 音楽", "Café 音楽"},
+		{"uploader fallback", "m4a", "", "Uploader display"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Conflicting music fields reproduce yt-dlp's default precedence.
+			fields := map[string]string{
+				"title": "Música: \"A/B\" — 100%\n夜", "track": "Detected track",
+				"artist": "Detected musician", "album_artist": "Detected band", "album": "Detected album",
+				"uploader": "Uploader display", "uploader_id": "@handle",
+				"original_url": "https://youtu.be/original", "webpage_url": "https://youtube.com/watch?v=canonical",
+			}
+			if tc.channel != "" {
+				fields["channel"] = tc.channel
+			}
+			var writtenTags map[string]string
+			fr := runnerFunc(func(ctx context.Context, name string, args ...string) (runner.Result, error) {
+				if name != "yt-dlp" {
+					t.Fatalf("unexpected tool: %s", name)
+				}
+				writtenTags = simulateYTDLPTags(t, args, fields)
+				return runner.Result{Stdout: []byte("/stage/source." + tc.format + "\n")}, nil
+			})
+			if _, err := DownloadAudio(context.Background(), fr, "https://youtu.be/original", t.TempDir(), tc.format, config.CookieConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			for tag, want := range map[string]string{
+				"title": "Música: \"A/B\" — 100%\n夜", "artist": tc.artist,
+				"album": "Música: \"A/B\" — 100%\n夜", "album_artist": tc.artist,
+				"comment": "https://youtu.be/original", "purl": "https://youtu.be/original",
+			} {
+				if got := writtenTags[tag]; got != want {
+					t.Errorf("embedded %s = %q, want %q", tag, got, want)
+				}
+			}
+		})
+	}
+}
+
+// Simulate the external tool's documented template alternatives, regex capture,
+// and meta_* precedence. Evaluating arguments rather than matching literal
+// flags catches truncated Unicode/newlines and incorrect fallback or music fields.
+// Real container writing is checked separately with generated MP3/M4A smoke files.
+func simulateYTDLPTags(t *testing.T, args []string, fields map[string]string) map[string]string {
+	t.Helper()
+	tags := map[string]string{
+		"title": fields["track"], "artist": fields["artist"],
+		"album": fields["album"], "album_artist": fields["album_artist"],
+		"comment": fields["webpage_url"], "purl": fields["webpage_url"],
+	}
+	template := regexp.MustCompile(`%\(([^)]+)\)s`)
+	for i, arg := range args {
+		if arg != "--parse-metadata" {
+			continue
+		}
+		from, pattern, ok := strings.Cut(args[i+1], ":")
+		if !ok {
+			t.Fatalf("invalid metadata expression: %q", args[i+1])
+		}
+		value := template.ReplaceAllStringFunc(from, func(match string) string {
+			keys, fallback, _ := strings.Cut(template.FindStringSubmatch(match)[1], "|")
+			for _, key := range strings.Split(keys, ",") {
+				if value, ok := fields[key]; ok {
+					return value
+				}
+			}
+			return fallback
+		})
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		matches := re.FindStringSubmatch(value)
+		if matches == nil {
+			continue
+		}
+		for i, name := range re.SubexpNames() {
+			if key, ok := strings.CutPrefix(name, "meta_"); ok {
+				tags[key] = matches[i]
+			}
+		}
+	}
+	return tags
 }
 
 type runnerFunc func(ctx context.Context, name string, args ...string) (runner.Result, error)
