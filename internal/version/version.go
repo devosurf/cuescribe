@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const Version = "0.1.25"
+const Version = "0.1.26"
 
 var (
 	Commit = "dev"
