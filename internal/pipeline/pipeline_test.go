@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,6 +65,102 @@ func TestRunPrefersManualSubtitles(t *testing.T) {
 	}
 	if doc.DetectedLanguage != "en" || doc.Segments[0].Speaker != "Alice" || doc.Segments[0].Text != "Hello" {
 		t.Fatalf("doc = %+v", doc)
+	}
+}
+
+func TestRunAutoFallsBackToAudioWhenSubtitleDownloadFails(t *testing.T) {
+	paths := config.PathsForHome(t.TempDir())
+	audioRunner := audioFakeRunner(t)
+	fr := fakeRunner(func(ctx context.Context, name string, args ...string) (runner.Result, error) {
+		if name != "yt-dlp" {
+			return audioRunner.Run(ctx, name, args...)
+		}
+		if contains(args, "--dump-json") {
+			return runner.Result{Stdout: []byte(`{
+				"title":"PentAGI overview",
+				"webpage_url":"https://www.youtube.com/watch?v=R70x5Ddzs1o",
+				"automatic_captions":{"en":[{"ext":"vtt","url":"https://example.test/auto.vtt"}]}
+			}`)}, nil
+		}
+		if contains(args, "--write-auto-subs") {
+			path := filepath.Join(filepath.Dir(argAfter(args, "-o")), "subtitle.en.vtt")
+			if err := os.WriteFile(path, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return runner.Result{}, errors.New("yt-dlp failed: exit status 1\nERROR: Unable to download video subtitles for 'en': HTTP Error 429: Too Many Requests")
+		}
+		path := filepath.Join(filepath.Dir(argAfter(args, "-o")), "source.m4a")
+		if err := os.WriteFile(path, []byte("media"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return runner.Result{Stdout: []byte(path + "\n")}, nil
+	})
+	doc, err := New(fr).Run(context.Background(), Options{
+		Input:        "https://www.youtube.com/watch?v=R70x5Ddzs1o",
+		Paths:        paths,
+		PlatformOS:   "darwin",
+		PlatformArch: "arm64",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v; want audio fallback after subtitle HTTP 429", err)
+	}
+	if doc.Mode != transcript.ModeAudio || doc.Title != "PentAGI overview" || doc.DetectedLanguage != "sv" {
+		t.Fatalf("doc = %+v", doc)
+	}
+	if len(doc.Segments) != 1 || doc.Segments[0].Text != "Hej" {
+		t.Fatalf("segments = %+v", doc.Segments)
+	}
+	entries, err := os.ReadDir(paths.CacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("temporary files left in cache: %v", entries)
+	}
+}
+
+func TestRunDoesNotFallBackWhenSubtitlesRequiredOrCanceled(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		source string
+		cancel bool
+	}{
+		{name: "subtitles required", source: "subs"},
+		{name: "canceled", source: "auto", cancel: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			downloadErr := errors.New("HTTP Error 429: Too Many Requests")
+			if tc.cancel {
+				downloadErr = context.Canceled
+			}
+			fr := fakeRunner(func(ctx context.Context, name string, args ...string) (runner.Result, error) {
+				if name == "yt-dlp" && contains(args, "--dump-json") {
+					return runner.Result{Stdout: []byte(`{
+						"automatic_captions":{"en":[{"ext":"vtt","url":"https://example.test/auto.vtt"}]}
+					}`)}, nil
+				}
+				if name == "yt-dlp" && contains(args, "--write-auto-subs") {
+					if tc.cancel {
+						cancel()
+					}
+					return runner.Result{}, downloadErr
+				}
+				t.Fatalf("started audio fallback despite %s: %s %v", tc.name, name, args)
+				return runner.Result{}, nil
+			})
+			_, err := New(fr).Run(ctx, Options{
+				Input:        "https://youtu.be/id",
+				Source:       tc.source,
+				Paths:        config.PathsForHome(t.TempDir()),
+				PlatformOS:   "darwin",
+				PlatformArch: "arm64",
+			})
+			if !errors.Is(err, downloadErr) {
+				t.Fatalf("Run() error = %v, want original subtitle error %v", err, downloadErr)
+			}
+		})
 	}
 }
 

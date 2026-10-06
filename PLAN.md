@@ -43,7 +43,7 @@ cuescribe download URL --audio-format mp3
 - Use YouTube subtitles before audio when available:
   - manual subtitles
   - auto subtitles
-  - audio fallback
+  - audio fallback when no compatible subtitles exist or subtitle downloading/parsing fails
 - Request and parse VTT for subtitles. Add an SRT parser in v1 if cheap, but VTT is the required YouTube path.
 
 ## Source Selection
@@ -60,6 +60,10 @@ Defaults:
 - `--source auto`
 - `--subs any`
 - `--lang auto`
+
+With `--source auto`, a subtitle download or parse failure is reported before
+falling back to audio transcription. `--source subs` returns the subtitle error
+without audio fallback. Cancellation stops the run instead of falling back.
 
 Translate behavior:
 

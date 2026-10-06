@@ -88,6 +88,19 @@ Common flags:
 When `-o` is omitted, Cuescribe writes a title-based file in the current directory, for example `Video Title.md`. Use `-o -` to print to stdout.
 Use `--list-formats URL` to print yt-dlp's available formats for troubleshooting download errors.
 
+The default `--source auto` prefers manual subtitles, then automatic subtitles.
+If no compatible subtitles exist or subtitle downloading/parsing fails (including
+YouTube HTTP 429 rate limits), Cuescribe reports the failure and falls back to
+audio transcription with Whisper. `--source subs` fails instead of using audio;
+canceling a run never starts an audio fallback. Use `--source audio` to skip
+subtitles entirely.
+
+Subtitle downloads and normalized audio live in temporary
+`~/.cache/cuescribe/run-*` directories, which are removed on both success and
+failure. yt-dlp's “Writing video subtitles to…” message announces the intended
+path, not a completed download. Finished transcripts are written to the output
+location, not those temporary directories.
+
 `--summarize` adds a fully local, multilingual summary to the output using a small LLM (Qwen3 via llama.cpp). The summary is written in the transcript's language unless `--summary-lang` says otherwise. Run `cuescribe setup summary` once to download a summary model — setup recommends one sized for the machine's RAM (8 GB: qwen3-1.7b, 16 GB: qwen3-4b, 32 GB+: qwen3-8b). After setup, change it with `cuescribe config summary --model qwen3-4b`; Cuescribe downloads managed Qwen models when missing. Point at a custom GGUF with `cuescribe config summary --model custom --path /path/to/model.gguf`.
 
 ## Download Audio For Listening

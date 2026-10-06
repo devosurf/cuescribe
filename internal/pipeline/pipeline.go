@@ -106,7 +106,12 @@ func (p Pipeline) transcribe(ctx context.Context, opts Options) (transcript.Docu
 	if source == "auto" || source == "subs" {
 		if selection, ok := ytdlp.SelectSubtitle(md, lang, subsMode, opts.Translate); ok {
 			progress.Step(opts.Progress, "Using %s subtitles (%s)", selection.Kind, selection.Lang)
-			return p.fromSubtitles(ctx, opts, md, selection)
+			doc, err := p.fromSubtitles(ctx, opts, md, selection)
+			if err == nil || source == "subs" || ctx.Err() != nil {
+				return doc, err
+			}
+			progress.Step(opts.Progress, "Subtitles failed; using audio transcription: %v", err)
+			return p.fromDownloadedAudio(ctx, opts, md)
 		}
 		if source == "subs" {
 			return transcript.Document{}, fmt.Errorf("Error: no compatible subtitles found.\nFix: use --source auto or --source audio")
